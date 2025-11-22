@@ -149,6 +149,26 @@ MOBILE_CSS = """
         color: #6b7280;
         margin-top: 24px;
     }
+      .api-status-panel {
+          background: #111827;
+          border-radius: 14px;
+          padding: 16px;
+          border: 1px solid #1f2937;
+          margin-top: 18px;
+      }
+      .api-status-row {
+          display: flex;
+          justify-content: space-between;
+          font-size: 0.9rem;
+          padding: 6px 0;
+          border-bottom: 1px solid #1f2937;
+      }
+      .api-status-row:last-child { border-bottom: none; }
+      .api-status-value {
+          font-weight: 600;
+      }
+      .api-status-value.active { color: #10b981; }
+      .api-status-value.inactive { color: #f87171; }
     @media (min-width: 768px) {
         .header-card, .conclusion-card {
             margin-left: auto;
@@ -239,68 +259,54 @@ def enable_chrome_password_manager_support():
     st.markdown(CHROME_PASSWORD_MANAGER_SCRIPT, unsafe_allow_html=True)
 
 
-CHROME_PASSWORD_SAVE_SCRIPT = """
-<script>
-(function triggerChromePasswordSave() {
-    const doc = window.parent?.document || window.document;
-
-    function getValue(id) {
-        const el = doc.getElementById(id);
-        return typeof el?.value === "string" ? el.value.trim() : "";
+def build_api_status_snapshot(
+    openai_key: str,
+    google_key: str,
+    model_name: str,
+    applied_at: Optional[str] = None,
+) -> Dict:
+    """Summarize the current API設定 status for UI display."""
+    return {
+        "openai_ready": bool((openai_key or "").strip()),
+        "google_ready": bool((google_key or "").strip()),
+        "model_name": (model_name or "").strip(),
+        "last_applied": applied_at or "未適用",
     }
 
-    const geminiModel = getValue("gemini_model_id") || "__DEFAULT_GEMINI_MODEL__";
-    const googleApiKey = getValue("google_ai_studio_api_key");
-    const openaiApiKey = getValue("openai_api_key");
 
-    const requests = [];
-    if (googleApiKey) {
-        requests.push({
-            id: geminiModel,
-            name: "Google AI Studio (" + geminiModel + ")",
-            password: googleApiKey,
-        });
-    }
-    if (openaiApiKey) {
-        requests.push({
-            id: "__OPENAI_DEFAULT_MODEL__",
-            name: "OpenAI API Key",
-            password: openaiApiKey,
-        });
-    }
+def render_api_status_panel(status: Optional[Dict]):
+    snapshot = status or {}
+    openai_ready = snapshot.get("openai_ready", False)
+    google_ready = snapshot.get("google_ready", False)
+    model_name = snapshot.get("model_name") or "未指定"
+    last_applied = snapshot.get("last_applied") or "未適用"
 
-    if (!requests.length) {
-        console.info("[ChromeSave] No API fields contained values.");
-        return;
-    }
-    if (!navigator.credentials || typeof PasswordCredential === "undefined") {
-        console.warn("[ChromeSave] Credential Management API is unavailable in this browser.");
-        return;
-    }
-
-    (async () => {
-        for (const payload of requests) {
-            try {
-                const credential = new PasswordCredential(payload);
-                await navigator.credentials.store(credential);
-            } catch (error) {
-                console.error("[ChromeSave] Failed to store credential", payload.id, error);
-            }
-        }
-        window.dispatchEvent(
-            new CustomEvent("chrome-password-save:done", { detail: { count: requests.length } })
-        );
-    })();
-})();
-</script>
-""".replace("__DEFAULT_GEMINI_MODEL__", DEFAULT_GEMINI_MODEL).replace(
-    "__OPENAI_DEFAULT_MODEL__", OPENAI_DEFAULT_MODEL
-)
-
-
-def trigger_chrome_password_save():
-    """Render the JS snippet that asks Chrome to save current API credentials."""
-    st.markdown(CHROME_PASSWORD_SAVE_SCRIPT, unsafe_allow_html=True)
+    st.markdown("### 🔑 API設定ステータス")
+    status_html = f"""
+    <div class="api-status-panel">
+        <div class="api-status-row">
+            <span>OpenAI API Key</span>
+            <span class="api-status-value {'active' if openai_ready else 'inactive'}">
+                {'設定済み' if openai_ready else '未設定'}
+            </span>
+        </div>
+        <div class="api-status-row">
+            <span>Google AI Studio API Key</span>
+            <span class="api-status-value {'active' if google_ready else 'inactive'}">
+                {'設定済み' if google_ready else '未設定'}
+            </span>
+        </div>
+        <div class="api-status-row">
+            <span>Gemini モデルID</span>
+            <span class="api-status-value">{model_name or '未指定'}</span>
+        </div>
+        <div class="api-status-row">
+            <span>最終適用</span>
+            <span class="api-status-value">{last_applied}</span>
+        </div>
+    </div>
+    """
+    st.markdown(status_html, unsafe_allow_html=True)
 
 
 def build_ai_user_prompt(payload: Dict) -> str:
@@ -856,18 +862,47 @@ def main():
         help="APIキーで有効なモデルID（例: gemini-1.5-flash）を指定。Chrome パスワード管理でキーとセット保存も可能です。",
     )
     google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
+
+    if "effective_openai_api_key" not in st.session_state:
+        st.session_state["effective_openai_api_key"] = openai_api_key_default.strip()
+    if "effective_google_api_key" not in st.session_state:
+        st.session_state["effective_google_api_key"] = google_api_key_default.strip()
+    if "effective_gemini_model" not in st.session_state:
+        st.session_state["effective_gemini_model"] = google_model_name
+    if "api_status_snapshot" not in st.session_state:
+        st.session_state["api_status_snapshot"] = build_api_status_snapshot(
+            st.session_state["effective_openai_api_key"],
+            st.session_state["effective_google_api_key"],
+            st.session_state["effective_gemini_model"],
+        )
+
     enable_chrome_password_manager_support()
-    st.markdown("#### 🔐 APIキーの保存")
-    st.caption("入力済みの API / モデル設定を Chrome のパスワードマネージャーに登録できます。")
-    save_to_chrome = st.button(
-        "APIキー設定をChromeに保存",
+    st.markdown("#### 🔄 APIキーの適用")
+    st.caption("入力したキーをアプリに反映し、画面下部のステータス表示を更新します。")
+    apply_api_keys = st.button(
+        "APIキーを適用して画面下部を更新",
         type="primary",
         use_container_width=True,
-        help="Chrome のパスワードマネージャーへ保存するので、次回以降は自動入力できます。",
+        help="AI 分析で使用するキーを確定し、ステータスを最新化します。",
     )
-    if save_to_chrome:
-        st.success("Chrome への保存をリクエストしました。ブラウザの保存ポップアップを確認してください。")
-        trigger_chrome_password_save()
+    if apply_api_keys:
+        applied_openai = openai_api_key.strip()
+        applied_google = google_api_key.strip()
+        st.session_state["effective_openai_api_key"] = applied_openai
+        st.session_state["effective_google_api_key"] = applied_google
+        st.session_state["effective_gemini_model"] = google_model_name
+        applied_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        st.session_state["api_status_snapshot"] = build_api_status_snapshot(
+            applied_openai,
+            applied_google,
+            google_model_name,
+            applied_timestamp,
+        )
+        st.success("APIキーを適用しました。画面下部の表示を更新しています。")
+
+    effective_openai_key = st.session_state.get("effective_openai_api_key", "").strip()
+    effective_google_key = st.session_state.get("effective_google_api_key", "").strip()
+    effective_gemini_model = st.session_state.get("effective_gemini_model", google_model_name)
 
     if not ticker_input:
         st.info("分析したいティッカーを入力してください。")
@@ -895,11 +930,11 @@ def main():
     news_items = fetch_news(snapshot["company_name"])
     with st.spinner("AIが分析中..."):
         analysis = generate_ai_analysis(
-            openai_api_key,
-            google_api_key,
+            effective_openai_key,
+            effective_google_key,
             snapshot,
             news_items,
-            google_model_name,
+            effective_gemini_model,
         )
 
     render_header(snapshot, analysis)
@@ -908,6 +943,7 @@ def main():
     render_conclusion(analysis)
     st.markdown("### 📊 詳細エリア")
     render_tabs(analysis, snapshot, news_items)
+    render_api_status_panel(st.session_state.get("api_status_snapshot"))
 
     st.markdown(
         "<p class='disclaimer'>* 本アプリは教育目的の情報提供ツールです。投資判断はご自身の責任で行ってください。</p>",
