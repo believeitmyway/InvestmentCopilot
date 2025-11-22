@@ -12,6 +12,13 @@ from duckduckgo_search import DDGS
 from openai import OpenAI
 
 try:
+    import requests
+    from bs4 import BeautifulSoup
+    SCRAPING_AVAILABLE = True
+except ImportError:
+    SCRAPING_AVAILABLE = False
+
+try:
     import google.generativeai as genai
 except ImportError:  # pragma: no cover - optional dependency
     genai = None
@@ -567,10 +574,19 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
     else:
         market_time = datetime.now(timezone.utc).isoformat()
 
+    # 日本語名を取得（日本株の場合）
+    company_name = info.get("longName") or info.get("shortName") or symbol
+    symbol_clean = symbol.replace(".T", "").strip()
+    if symbol_clean.isdigit():
+        # 日本株の場合、日本語名を優先的に使用
+        japanese_name = get_japanese_company_name_cached(symbol, info)
+        if japanese_name:
+            company_name = japanese_name
+
     return {
         "error": None,
         "symbol": symbol,
-        "company_name": info.get("longName") or info.get("shortName") or symbol,
+        "company_name": company_name,
         "price": price,
         "previous_close": prev_close,
         "day_change": day_change,
@@ -736,8 +752,86 @@ def sort_news_by_date(news_items: List[Dict], reverse: bool = True) -> List[Dict
     return sorted(news_items, key=get_sort_key, reverse=reverse)
 
 
-def get_japanese_company_name(symbol: str) -> Optional[str]:
-    """ティッカーシンボルから日本語の社名を取得する"""
+def is_japanese_text(text: str) -> bool:
+    """テキストが日本語を含むかどうかを判定"""
+    if not text:
+        return False
+    # ひらがな、カタカナ、漢字、全角英数字の範囲をチェック
+    japanese_pattern = re.compile(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uFF00-\uFFEF]')
+    return bool(japanese_pattern.search(text))
+
+
+def get_japanese_name_from_yfinance(symbol: str) -> Optional[str]:
+    """yfinanceのinfoから日本語名を取得"""
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        
+        # longNameまたはshortNameが日本語の場合、それを返す
+        for key in ["longName", "shortName", "name"]:
+            value = info.get(key)
+            if value and isinstance(value, str) and is_japanese_text(value):
+                return value.strip()
+    except Exception as e:
+        logging.debug(f"yfinanceから日本語名取得失敗 ({symbol}): {e}")
+    return None
+
+
+def get_japanese_name_from_yahoo_finance_jp(symbol: str) -> Optional[str]:
+    """Yahoo Finance Japanから日本語名をスクレイピング"""
+    if not SCRAPING_AVAILABLE:
+        return None
+    
+    symbol_clean = symbol.replace(".T", "").strip()
+    if not symbol_clean.isdigit():
+        return None
+    
+    try:
+        # Yahoo Finance JapanのURL
+        url = f"https://finance.yahoo.co.jp/quote/{symbol_clean}.T"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, "lxml")
+        
+        # 複数のセレクタを試行
+        selectors = [
+            'h1[data-test="company-name"]',
+            'h1.company-name',
+            'h1',
+            '[data-test="company-name"]',
+            '.company-name',
+        ]
+        
+        for selector in selectors:
+            element = soup.select_one(selector)
+            if element:
+                text = element.get_text(strip=True)
+                if text and is_japanese_text(text):
+                    return text
+        
+        # titleタグから取得を試行
+        title = soup.find("title")
+        if title:
+            title_text = title.get_text(strip=True)
+            # タイトルから「(6501.T)」のような部分を除去
+            title_text = re.sub(r'\s*\([0-9]+\.T\)\s*', '', title_text)
+            if title_text and is_japanese_text(title_text):
+                return title_text
+                
+    except Exception as e:
+        logging.debug(f"Yahoo Finance Japanスクレイピング失敗 ({symbol}): {e}")
+    
+    return None
+
+
+def get_japanese_company_name(symbol: str, yfinance_info: Optional[Dict] = None) -> Optional[str]:
+    """ティッカーシンボルから日本語の社名を取得する（複数の方法を試行）"""
     if not symbol:
         return None
     
@@ -745,7 +839,24 @@ def get_japanese_company_name(symbol: str) -> Optional[str]:
     if not symbol_clean.isdigit():
         return None
     
-    # 主要な日本株のティッカーシンボルと日本語社名のマッピング
+    # 1. yfinanceのinfoから取得（引数で渡された場合）
+    if yfinance_info:
+        for key in ["longName", "shortName", "name"]:
+            value = yfinance_info.get(key)
+            if value and isinstance(value, str) and is_japanese_text(value):
+                return value.strip()
+    
+    # 2. yfinanceのAPIから直接取得
+    japanese_name = get_japanese_name_from_yfinance(symbol)
+    if japanese_name:
+        return japanese_name
+    
+    # 3. Yahoo Finance Japanからスクレイピング
+    japanese_name = get_japanese_name_from_yahoo_finance_jp(symbol)
+    if japanese_name:
+        return japanese_name
+    
+    # 4. フォールバック: 主要な日本株のティッカーシンボルと日本語社名のマッピング
     japanese_names = {
         "6501": "日立製作所",
         "6502": "東芝",
@@ -956,8 +1067,14 @@ def get_japanese_company_name(symbol: str) -> Optional[str]:
     return japanese_names.get(symbol_clean)
 
 
+@st.cache_data(ttl=86400, show_spinner=False)  # 24時間キャッシュ
+def get_japanese_company_name_cached(symbol: str, yfinance_info: Optional[Dict] = None) -> Optional[str]:
+    """キャッシュ付きの日本語社名取得関数"""
+    return get_japanese_company_name(symbol, yfinance_info)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15) -> List[Dict]:
+def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, yfinance_info: Optional[Dict] = None) -> List[Dict]:
     """日本語の最新ニュースを確実に取得する関数"""
     if not query:
         return []
@@ -971,10 +1088,10 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15) 
             is_japanese_stock = True
             symbol_clean = symbol.replace(".T", "").strip()
     
-    # 日本語の社名を取得
+    # 日本語の社名を取得（キャッシュ付き、yfinance_infoを渡す）
     japanese_company_name = None
     if is_japanese_stock and symbol_clean:
-        japanese_company_name = get_japanese_company_name(symbol)
+        japanese_company_name = get_japanese_company_name_cached(symbol, yfinance_info)
     
     news_items = []
     seen_urls = set()  # 重複チェック用
@@ -1640,7 +1757,9 @@ def main():
         st.caption(normalized["conversion_note"])
 
     with st.spinner("最新ニュースを取得中..."):
-        news_items = fetch_news(snapshot["company_name"], symbol=snapshot.get("symbol"))
+        # snapshotからinfoを取得して日本語名取得に活用
+        yfinance_info = snapshot.get("info", {})
+        news_items = fetch_news(snapshot["company_name"], symbol=snapshot.get("symbol"), yfinance_info=yfinance_info)
     
     # ニュース取得結果のフィードバック
     if not news_items:
