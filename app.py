@@ -10,6 +10,11 @@ import yfinance as yf
 from duckduckgo_search import DDGS
 from openai import OpenAI
 
+try:
+    import google.generativeai as genai
+except ImportError:  # pragma: no cover - optional dependency
+    genai = None
+
 
 st.set_page_config(
     page_title="Mobile-First AI Investment Dashboard",
@@ -158,6 +163,29 @@ MOBILE_CSS = """
 """
 
 st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+
+
+AI_SYSTEM_PROMPT = (
+    "You are an equity strategist who writes concise Japanese summaries for busy executives. "
+    "Use the provided market snapshot to compare quantitative signals with analyst consensus. "
+    "Output JSON exactly with the requested schema."
+)
+
+
+def build_ai_user_prompt(payload: Dict) -> str:
+    return (
+        "マーケットデータ:\n"
+        f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+        "出力フォーマット(JSON):\n"
+        "{"
+        '"verdict_short":"",'
+        '"action":"Buy | Sell | Hold",'
+        '"score":0,'
+        '"bullet_points":["","", ""],'
+        '"scenario":{"bullish_case":"","bearish_case":"","competitive_edge":""},'
+        '"analysis_comment":""'
+        "}"
+    )
 
 
 def normalize_ticker_input(raw_symbol: str) -> Dict[str, str]:
@@ -398,8 +426,8 @@ def heuristic_analysis(snapshot: Dict) -> Dict:
         bullets.append("市場ボラティリティに備えて分散を維持")
 
     scenario = {
-        "bullish_case": "AIキー未設定のため、シンプル指標から推奨されています。",
-        "bearish_case": "短期テクニカルの振れに注意しつつ指標の確認が必要です。",
+        "bullish_case": "外部AIキー未設定のため、シンプル指標で強気シナリオを推定しています。",
+        "bearish_case": "短期テクニカルの振れに注意しつつファンダ指標の確認が必要です。",
         "competitive_edge": "目標株価と機関投資家動向を主要な拠り所としています。",
     }
 
@@ -409,54 +437,87 @@ def heuristic_analysis(snapshot: Dict) -> Dict:
         "score": score,
         "bullet_points": bullets[:3],
         "scenario": scenario,
-        "analysis_comment": "OpenAIキー未入力のため統計ベースの暫定コメントです。",
+        "analysis_comment": "AIキー未入力のため統計ベースの暫定コメントです。",
     }
 
 
-def generate_ai_analysis(
-    api_key: Optional[str], snapshot: Dict, news_items: List[Dict]
-) -> Dict:
-    payload = build_analysis_payload(snapshot, news_items)
-    fallback = heuristic_analysis(snapshot)
-    if not api_key:
-        return fallback
+def _sanitize_ai_response(parsed: Dict) -> Dict:
+    parsed = parsed or {}
+    parsed["bullet_points"] = (parsed.get("bullet_points") or [])[:3]
+    return parsed
 
+
+def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[Dict]:
+    if not api_key:
+        return None
     try:
         client = OpenAI(api_key=api_key)
-        system_prompt = (
-            "You are an equity strategist who writes concise Japanese summaries for busy "
-            "executives. Use the provided market snapshot to compare quantitative signals "
-            "with analyst consensus. Output JSON exactly with the requested schema."
-        )
-        user_prompt = (
-            "マーケットデータ:\n"
-            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
-            "出力フォーマット(JSON):\n"
-            "{"
-            '"verdict_short":"",'
-            '"action":"Buy | Sell | Hold",'
-            '"score":0,'
-            '"bullet_points":["","", ""],'
-            '"scenario":{"bullish_case":"","bearish_case":"","competitive_edge":""},'
-            '"analysis_comment":""'
-            "}"
-        )
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": AI_SYSTEM_PROMPT},
+                {"role": "user", "content": build_ai_user_prompt(payload)},
             ],
         )
         message = response.choices[0].message.content
         parsed = json.loads(message)
-        parsed["bullet_points"] = parsed.get("bullet_points", [])[:3]
-        return parsed
+        return _sanitize_ai_response(parsed)
     except Exception:  # pragma: no cover - API failure
-        return fallback
+        return None
+
+
+def request_gemini_analysis(api_key: Optional[str], payload: Dict) -> Optional[Dict]:
+    if not api_key or genai is None:
+        return None
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=AI_SYSTEM_PROMPT,
+        )
+        response = model.generate_content(
+            contents=build_ai_user_prompt(payload),
+            generation_config={
+                "temperature": 0.2,
+                "response_mime_type": "application/json",
+            },
+        )
+        message = getattr(response, "text", None)
+        if not message and getattr(response, "candidates", None):
+            first_candidate = response.candidates[0]
+            content = getattr(first_candidate, "content", None)
+            parts = getattr(content, "parts", None)
+            if parts:
+                first_part = parts[0]
+                message = getattr(first_part, "text", None) or getattr(first_part, "content", None)
+        if not message:
+            return None
+        parsed = json.loads(message)
+        return _sanitize_ai_response(parsed)
+    except Exception:  # pragma: no cover - API failure
+        return None
+
+
+def generate_ai_analysis(
+    openai_api_key: Optional[str],
+    google_api_key: Optional[str],
+    snapshot: Dict,
+    news_items: List[Dict],
+) -> Dict:
+    payload = build_analysis_payload(snapshot, news_items)
+    fallback = heuristic_analysis(snapshot)
+
+    google_response = request_gemini_analysis(google_api_key, payload)
+    if google_response:
+        return google_response
+
+    openai_response = request_openai_analysis(openai_api_key, payload)
+    if openai_response:
+        return openai_response
+
+    return fallback
 
 
 def render_header(snapshot: Dict, analysis: Dict):
@@ -595,12 +656,19 @@ def main():
     st.caption("忙しいビジネスマン向けの即断支援ツール（学習目的のみ）")
 
     ticker_input = st.text_input("ティッカーシンボル", value="AAPL")
-    api_key_default = os.getenv("OPENAI_API_KEY", "")
-    api_key = st.text_input(
+    openai_api_key_default = os.getenv("OPENAI_API_KEY", "")
+    openai_api_key = st.text_input(
         "OpenAI API Key（任意・ローカルで保持）",
         type="password",
-        value=api_key_default,
+        value=openai_api_key_default,
         help="APIキーはブラウザ内のみで使用され、サーバーには保存されません。",
+    )
+    google_api_key_default = os.getenv("GOOGLE_API_KEY", "")
+    google_api_key = st.text_input(
+        "Google AI Studio API Key（Gemini / 任意）",
+        type="password",
+        value=google_api_key_default,
+        help="Gemini（Google AI Studio）のキーもサポートしています。",
     )
 
     if not ticker_input:
@@ -628,7 +696,7 @@ def main():
 
     news_items = fetch_news(snapshot["company_name"])
     with st.spinner("AIが分析中..."):
-        analysis = generate_ai_analysis(api_key, snapshot, news_items)
+        analysis = generate_ai_analysis(openai_api_key, google_api_key, snapshot, news_items)
 
     render_header(snapshot, analysis)
     st.markdown("### ✅ 結論エリア")
