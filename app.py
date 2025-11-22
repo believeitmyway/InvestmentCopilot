@@ -880,7 +880,7 @@ def describe_analysis_source(analysis: Dict) -> str:
 
 
 def render_tabs(analysis: Dict, snapshot: Dict, news_items: List[Dict]):
-    tabs = st.tabs(["シナリオ", "プロの評価", "データ / ニュース"])
+    tabs = st.tabs(["シナリオ", "プロの評価", "データ / ニュース", "rawデータ"])
 
     scenario = analysis.get("scenario", {})
     with tabs[0]:
@@ -949,6 +949,25 @@ def render_tabs(analysis: Dict, snapshot: Dict, news_items: List[Dict]):
                 f'<div class="news-body">{news.get("snippet") or ""}</div></div>',
                 unsafe_allow_html=True,
             )
+
+    with tabs[3]:
+        st.markdown("**📋 rawデータ**")
+        st.caption("取得したデータをそのまま表示します。デバッグやプロンプト改良の参考にしてください。")
+        
+        # 分析用ペイロードを構築
+        payload = build_analysis_payload(snapshot, news_items)
+        
+        st.markdown("#### 1. 株価・経営指標データ（snapshot）")
+        st.json(snapshot)
+        
+        st.markdown("#### 2. ニュースデータ（news_items）")
+        st.json(news_items)
+        
+        st.markdown("#### 3. AI分析用ペイロード（payload）")
+        st.json(payload)
+        
+        st.markdown("#### 4. AI分析結果（analysis）")
+        st.json(analysis)
 
 
 def main():
