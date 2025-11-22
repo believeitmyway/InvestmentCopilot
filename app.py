@@ -1198,6 +1198,85 @@ def get_japanese_company_name_cached(symbol: str, yfinance_info: Optional[Dict] 
     return get_japanese_company_name(symbol, yfinance_info)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)  # 1時間キャッシュ
+def fetch_article_content(url: str, timeout: int = 10) -> Optional[str]:
+    """ニュース記事のURLから記事の全文を取得する（キャッシュ付き）"""
+    if not SCRAPING_AVAILABLE or not url:
+        return None
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, "lxml")
+        
+        # 一般的なニュース記事の本文セレクタを試行
+        # 日本語ニュースサイト向けのセレクタ
+        article_selectors = [
+            'article',
+            '.article-body',
+            '.article-content',
+            '.article-text',
+            '.news-body',
+            '.news-content',
+            '.content-body',
+            '#article-body',
+            '#article-content',
+            '#main-content',
+            'main article',
+            '[role="article"]',
+            '.post-content',
+            '.entry-content',
+            'div.article',
+            'div.content',
+        ]
+        
+        article_text = None
+        for selector in article_selectors:
+            article_elem = soup.select_one(selector)
+            if article_elem:
+                # スクリプトやスタイルタグを除去
+                for script in article_elem(["script", "style", "nav", "header", "footer", "aside", "advertisement"]):
+                    script.decompose()
+                
+                # テキストを取得
+                text = article_elem.get_text(separator="\n", strip=True)
+                if text and len(text) > 100:  # 最低100文字以上あることを確認
+                    article_text = text
+                    break
+        
+        # セレクタで見つからない場合、pタグを集めて本文として使用
+        if not article_text:
+            paragraphs = soup.find_all("p")
+            if paragraphs:
+                text_parts = []
+                for p in paragraphs:
+                    text = p.get_text(strip=True)
+                    if text and len(text) > 20:  # 短すぎる段落は除外
+                        text_parts.append(text)
+                if text_parts:
+                    article_text = "\n".join(text_parts)
+        
+        # 取得したテキストをクリーンアップ
+        if article_text:
+            # 余分な空白を削除
+            lines = [line.strip() for line in article_text.split("\n") if line.strip()]
+            article_text = "\n".join(lines)
+            
+            # 最低200文字以上あることを確認（snippetより長いことを保証）
+            if len(article_text) > 200:
+                return article_text
+        
+        return None
+    except Exception as e:
+        logging.debug(f"記事全文取得失敗 ({url}): {e}")
+        return None
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, yfinance_info: Optional[Dict] = None) -> List[Dict]:
     """日本語の最新ニュースを確実に取得する関数"""
@@ -1427,7 +1506,26 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     news_items = sort_news_by_importance_and_date(news_items, reverse=True)
     
     # max_resultsまでに制限（ただし、重要度の高いニュースは優先的に含める）
-    return news_items[:max_results]
+    news_items = news_items[:max_results]
+    
+    # 各ニュースアイテムに対して記事の全文を取得（snippetが途中で切れている可能性があるため）
+    # 全文取得に失敗した場合は、元のsnippetを使用
+    for news_item in news_items:
+        url = news_item.get("url", "")
+        original_snippet = news_item.get("snippet", "")
+        
+        # 記事の全文を取得
+        if url and original_snippet:
+            full_content = fetch_article_content(url, timeout=8)
+            if full_content:
+                # 全文が取得できた場合は、snippetを全文で置き換え
+                news_item["snippet"] = full_content
+                news_item["full_content_fetched"] = True
+            else:
+                # 全文が取得できなかった場合は、元のsnippetを使用
+                news_item["full_content_fetched"] = False
+    
+    return news_items
 
 
 def build_analysis_payload(snapshot: Dict, news_items: List[Dict]) -> Dict:
