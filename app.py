@@ -202,7 +202,7 @@ DEFAULT_GEMINI_MODEL = (
     os.getenv("GOOGLE_GENAI_MODEL")
     or os.getenv("GEMINI_MODEL")
     or os.getenv("GEMINI_MODEL_NAME")
-    or "gemini-1.5-flash"
+    or "gemini-2.5-flash-lite"
 )
 
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
