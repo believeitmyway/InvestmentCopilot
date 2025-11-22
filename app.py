@@ -239,61 +239,63 @@ def enable_chrome_password_manager_support():
     st.markdown(CHROME_PASSWORD_MANAGER_SCRIPT, unsafe_allow_html=True)
 
 
-CHROME_PASSWORD_SAVE_SCRIPT = f"""
+CHROME_PASSWORD_SAVE_SCRIPT = """
 <script>
-(function triggerChromePasswordSave() {{
+(function triggerChromePasswordSave() {
     const doc = window.parent?.document || window.document;
 
-    function getValue(id) {{
+    function getValue(id) {
         const el = doc.getElementById(id);
         return typeof el?.value === "string" ? el.value.trim() : "";
-    }}
+    }
 
-    const geminiModel = getValue("gemini_model_id") || "{DEFAULT_GEMINI_MODEL}";
+    const geminiModel = getValue("gemini_model_id") || "__DEFAULT_GEMINI_MODEL__";
     const googleApiKey = getValue("google_ai_studio_api_key");
     const openaiApiKey = getValue("openai_api_key");
 
     const requests = [];
-    if (googleApiKey) {{
-        requests.push({{
+    if (googleApiKey) {
+        requests.push({
             id: geminiModel,
             name: "Google AI Studio (" + geminiModel + ")",
             password: googleApiKey,
-        }});
-    }}
-    if (openaiApiKey) {{
-        requests.push({{
-            id: "{OPENAI_DEFAULT_MODEL}",
+        });
+    }
+    if (openaiApiKey) {
+        requests.push({
+            id: "__OPENAI_DEFAULT_MODEL__",
             name: "OpenAI API Key",
             password: openaiApiKey,
-        }});
-    }}
+        });
+    }
 
-    if (!requests.length) {{
+    if (!requests.length) {
         console.info("[ChromeSave] No API fields contained values.");
         return;
-    }}
-    if (!navigator.credentials || typeof PasswordCredential === "undefined") {{
+    }
+    if (!navigator.credentials || typeof PasswordCredential === "undefined") {
         console.warn("[ChromeSave] Credential Management API is unavailable in this browser.");
         return;
-    }}
+    }
 
-    (async () => {{
-        for (const payload of requests) {{
-            try {{
+    (async () => {
+        for (const payload of requests) {
+            try {
                 const credential = new PasswordCredential(payload);
                 await navigator.credentials.store(credential);
-            }} catch (error) {{
+            } catch (error) {
                 console.error("[ChromeSave] Failed to store credential", payload.id, error);
-            }}
-        }}
+            }
+        }
         window.dispatchEvent(
-            new CustomEvent("chrome-password-save:done", {{ detail: {{ count: requests.length }} }})
+            new CustomEvent("chrome-password-save:done", { detail: { count: requests.length } })
         );
-    }})();
+    })();
 })();
 </script>
-"""
+""".replace("__DEFAULT_GEMINI_MODEL__", DEFAULT_GEMINI_MODEL).replace(
+    "__OPENAI_DEFAULT_MODEL__", OPENAI_DEFAULT_MODEL
+)
 
 
 def trigger_chrome_password_save():
