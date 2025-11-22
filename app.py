@@ -1305,7 +1305,7 @@ def main():
         help="APIキーはブラウザ内のみで使用され、Chrome のパスワードマネージャーに保存して自動入力できます。",
     )
     
-    ticker_input = st.text_input("ティッカーシンボル", value="AAPL")
+    ticker_input = st.text_input("ティッカーシンボル", value="6501")
 
     if "effective_openai_api_key" not in st.session_state:
         st.session_state["effective_openai_api_key"] = openai_api_key_default.strip()
