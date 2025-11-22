@@ -796,6 +796,120 @@ def filter_recent_news(news_items: List[Dict], days_threshold: int = 30) -> List
     return filtered
 
 
+def is_shallow_article(item: Dict, company_name: Optional[str] = None, symbol: Optional[str] = None) -> bool:
+    """ランキングや市場動向のような薄い記事かを判定"""
+    title = (item.get("title") or "").lower()
+    snippet = (item.get("snippet") or "").lower()
+    text = f"{title} {snippet}"
+    
+    # 薄い記事を示すキーワード（日本語）
+    shallow_keywords_ja = [
+        "ランキング", "トップ", "上位", "ベスト", "ワースト",
+        "市場動向", "相場概況", "市況", "マーケットサマリー",
+        "株価ランキング", "上昇ランキング", "下落ランキング",
+        "注目銘柄", "人気銘柄", "急騰銘柄", "急落銘柄",
+        "日経平均", "TOPIX", "ダウ平均", "ナスダック",
+        "市場総括", "相場総括", "市況レポート",
+        "複数銘柄", "多数銘柄", "各銘柄", "各社",
+    ]
+    
+    # 薄い記事を示すキーワード（英語）
+    shallow_keywords_en = [
+        "ranking", "top", "best", "worst", "list",
+        "market overview", "market summary", "market wrap",
+        "stock ranking", "gainers", "losers", "most active",
+        "market movers", "market recap", "daily wrap",
+        "multiple stocks", "several stocks", "various stocks",
+    ]
+    
+    # タイトルにランキングや市場動向のキーワードが含まれているか
+    for keyword in shallow_keywords_ja + shallow_keywords_en:
+        if keyword in text:
+            # ただし、対象銘柄名がタイトルに含まれている場合は除外（対象銘柄に焦点を当てたランキング記事の可能性）
+            if company_name and company_name.lower() in title:
+                continue
+            if symbol and symbol.replace(".T", "").strip().lower() in title:
+                continue
+            return True
+    
+    # 複数の銘柄コードが含まれている場合（3つ以上）は薄い記事の可能性が高い
+    if symbol:
+        symbol_clean = symbol.replace(".T", "").strip()
+        if symbol_clean.isdigit():
+            # 4桁の数字（銘柄コード）が3つ以上含まれているか
+            stock_codes = re.findall(r'\b\d{4}\b', text)
+            if len(stock_codes) >= 3:
+                # 対象銘柄が含まれていても、他の銘柄が多く含まれている場合は薄い記事
+                if symbol_clean not in stock_codes:
+                    return True
+                # 対象銘柄が含まれていても、3つ以上の銘柄が含まれている場合は市場動向記事の可能性が高い
+                if len(set(stock_codes)) >= 3:
+                    return True
+    
+    return False
+
+
+def calculate_focus_score(item: Dict, company_name: Optional[str] = None, symbol: Optional[str] = None, query: Optional[str] = None) -> int:
+    """対象銘柄への焦点度をスコア化（高いほど対象銘柄に焦点を当てている）"""
+    title = (item.get("title") or "").lower()
+    snippet = (item.get("snippet") or "").lower()
+    text = f"{title} {snippet}"
+    
+    score = 0
+    
+    # 対象銘柄名がタイトルに含まれている場合は高スコア
+    if company_name:
+        company_name_lower = company_name.lower()
+        if company_name_lower in title:
+            score += 10  # タイトルに含まれている場合は高スコア
+        if company_name_lower in snippet:
+            score += 5  # 本文に含まれている場合もスコア加算
+        
+        # 対象銘柄名の出現回数をカウント
+        count = text.count(company_name_lower)
+        score += min(count * 2, 10)  # 最大10点まで
+    
+    # ティッカーシンボルが含まれている場合もスコア加算
+    if symbol:
+        symbol_clean = symbol.replace(".T", "").strip().lower()
+        if symbol_clean in title:
+            score += 8
+        if symbol_clean in snippet:
+            score += 4
+        
+        # ティッカーシンボルの出現回数をカウント
+        count = text.count(symbol_clean)
+        score += min(count * 2, 8)  # 最大8点まで
+    
+    # クエリ（英語の社名など）が含まれている場合もスコア加算
+    if query:
+        query_lower = query.lower()
+        if query_lower in title:
+            score += 6
+        if query_lower in snippet:
+            score += 3
+    
+    # 深い分析を示すキーワードが含まれている場合はボーナス
+    deep_analysis_keywords_ja = [
+        "戦略", "経営方針", "中期経営計画", "事業戦略",
+        "業績分析", "財務分析", "投資判断", "投資評価",
+        "競争力", "競合分析", "市場シェア", "事業展開",
+        "IR説明会", "決算説明会", "投資家説明会",
+    ]
+    
+    deep_analysis_keywords_en = [
+        "strategy", "business plan", "financial analysis",
+        "investment thesis", "competitive", "market share",
+        "earnings call", "investor day", "analyst meeting",
+    ]
+    
+    for keyword in deep_analysis_keywords_ja + deep_analysis_keywords_en:
+        if keyword in text:
+            score += 2
+    
+    return score
+
+
 def calculate_news_importance_score(item: Dict) -> int:
     """ニュースの重要度スコアを計算（重要キーワードが含まれているか）"""
     title = (item.get("title") or "").lower()
@@ -828,11 +942,14 @@ def calculate_news_importance_score(item: Dict) -> int:
     return score
 
 
-def sort_news_by_importance_and_date(news_items: List[Dict], reverse: bool = True) -> List[Dict]:
-    """ニュースを重要度と日付でソート（重要度が高い順、同じ重要度なら新しい順）"""
+def sort_news_by_importance_and_date(news_items: List[Dict], reverse: bool = True, company_name: Optional[str] = None, symbol: Optional[str] = None, query: Optional[str] = None) -> List[Dict]:
+    """ニュースを重要度、焦点度、日付でソート（重要度と焦点度が高い順、同じなら新しい順）"""
     def get_sort_key(item: Dict) -> tuple:
         # 重要度スコア（高い方が優先）
         importance_score = calculate_news_importance_score(item)
+        
+        # 焦点度スコア（対象銘柄に焦点を当てているほど高い）
+        focus_score = calculate_focus_score(item, company_name, symbol, query)
         
         # 日付
         date_str = item.get("published")
@@ -847,13 +964,13 @@ def sort_news_by_importance_and_date(news_items: List[Dict], reverse: bool = Tru
             else:
                 parsed_date = datetime(1970, 1, 1, tzinfo=timezone.utc)
         
-        # 重要度スコア（降順）、日付（降順）でソート
-        # reverse=Trueの場合、(-importance_score, -parsed_date.timestamp()) でソート
+        # 重要度スコア（降順）、焦点度スコア（降順）、日付（降順）でソート
+        # reverse=Trueの場合、(-importance_score, -focus_score, -parsed_date.timestamp()) でソート
         # reverse=Falseの場合、その逆
         if reverse:
-            return (-importance_score, -parsed_date.timestamp())
+            return (-importance_score, -focus_score, -parsed_date.timestamp())
         else:
-            return (importance_score, parsed_date.timestamp())
+            return (importance_score, focus_score, parsed_date.timestamp())
     
     return sorted(news_items, key=get_sort_key)
 
@@ -1502,10 +1619,51 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     # 最新のニュースのみをフィルタリング（過去1年以内）
     news_items = filter_recent_news(news_items, days_threshold=365)
     
-    # 重要度と日付でソート（重要度が高い順、同じ重要度なら新しい順）
-    news_items = sort_news_by_importance_and_date(news_items, reverse=True)
+    # 薄い記事（ランキングや市場動向記事）を除外
+    filtered_news_items = []
+    shallow_count = 0
+    for item in news_items:
+        if is_shallow_article(item, japanese_company_name, symbol):
+            shallow_count += 1
+            continue
+        filtered_news_items.append(item)
     
-    # max_resultsまでに制限（ただし、重要度の高いニュースは優先的に含める）
+    news_items = filtered_news_items
+    
+    # フィルタリング結果をログに記録
+    if shallow_count > 0:
+        logging.info(f"薄い記事を {shallow_count} 件除外しました。")
+    
+    # 重要度、焦点度、日付でソート（重要度と焦点度が高い順、同じなら新しい順）
+    news_items = sort_news_by_importance_and_date(
+        news_items, 
+        reverse=True,
+        company_name=japanese_company_name or query,
+        symbol=symbol,
+        query=query
+    )
+    
+    # 焦点度が低い記事を除外（焦点度スコアが0の記事は除外）
+    # ただし、重要度が高い記事（決算発表など）は例外として含める
+    focus_filtered_items = []
+    low_focus_count = 0
+    for item in news_items:
+        focus_score = calculate_focus_score(item, japanese_company_name or query, symbol, query)
+        importance_score = calculate_news_importance_score(item)
+        
+        # 焦点度が0かつ重要度も低い場合は除外
+        if focus_score == 0 and importance_score < 4:
+            low_focus_count += 1
+            continue
+        focus_filtered_items.append(item)
+    
+    news_items = focus_filtered_items
+    
+    # フィルタリング結果をログに記録
+    if low_focus_count > 0:
+        logging.info(f"焦点度の低い記事を {low_focus_count} 件除外しました。")
+    
+    # max_resultsまでに制限（ただし、重要度と焦点度の高いニュースは優先的に含める）
     news_items = news_items[:max_results]
     
     # 各ニュースアイテムに対して記事の全文を取得（snippetが途中で切れている可能性があるため）
