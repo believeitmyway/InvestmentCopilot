@@ -612,10 +612,11 @@ def parse_ai_json_payload(message: Optional[str]) -> Optional[Dict]:
 
 
 def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[Dict]:
-    if not api_key:
+    api_key_clean = (api_key or "").strip()
+    if not api_key_clean:
         return None
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key_clean)
         response = client.chat.completions.create(
             model=OPENAI_DEFAULT_MODEL,
             temperature=0.2,
@@ -631,7 +632,8 @@ def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[D
             return None
         parsed["source"] = "openai"
         return _sanitize_ai_response(parsed)
-    except Exception:  # pragma: no cover - API failure
+    except Exception as e:  # pragma: no cover - API failure
+        st.error(f"OpenAI API呼び出しエラー: {str(e)}")
         return None
 
 
@@ -640,11 +642,14 @@ def request_gemini_analysis(
     payload: Dict,
     model_name: Optional[str],
 ) -> Optional[Dict]:
-    if not api_key or genai is None:
+    if genai is None:
+        return None
+    api_key_clean = (api_key or "").strip()
+    if not api_key_clean:
         return None
     model_id = (model_name or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
     try:
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=api_key_clean)
         model = genai.GenerativeModel(
             model_name=model_id,
             system_instruction=AI_SYSTEM_PROMPT,
@@ -671,7 +676,8 @@ def request_gemini_analysis(
             return None
         parsed["source"] = "gemini"
         return _sanitize_ai_response(parsed)
-    except Exception:  # pragma: no cover - API failure
+    except Exception as e:  # pragma: no cover - API failure
+        st.error(f"Gemini API呼び出しエラー: {str(e)}")
         return None
 
 
@@ -685,13 +691,17 @@ def generate_ai_analysis(
     payload = build_analysis_payload(snapshot, news_items)
     fallback = heuristic_analysis(snapshot)
 
-    google_response = request_gemini_analysis(google_api_key, payload, google_model_name)
-    if google_response:
-        return google_response
+    google_key_clean = (google_api_key or "").strip()
+    if google_key_clean:
+        google_response = request_gemini_analysis(google_key_clean, payload, google_model_name)
+        if google_response:
+            return google_response
 
-    openai_response = request_openai_analysis(openai_api_key, payload)
-    if openai_response:
-        return openai_response
+    openai_key_clean = (openai_api_key or "").strip()
+    if openai_key_clean:
+        openai_response = request_openai_analysis(openai_key_clean, payload)
+        if openai_response:
+            return openai_response
 
     return fallback
 
@@ -898,7 +908,12 @@ def main():
             google_model_name,
             applied_timestamp,
         )
-        st.success("APIキーを適用しました。画面下部の表示を更新しています。")
+        if applied_google:
+            st.success(f"Google APIキーを適用しました（長さ: {len(applied_google)}文字）。次の分析で使用されます。")
+        elif applied_openai:
+            st.success(f"OpenAI APIキーを適用しました（長さ: {len(applied_openai)}文字）。次の分析で使用されます。")
+        else:
+            st.warning("APIキーが入力されていません。ヒューリスティック分析が使用されます。")
 
     effective_openai_key = st.session_state.get("effective_openai_api_key", "").strip()
     effective_google_key = st.session_state.get("effective_google_api_key", "").strip()
@@ -928,6 +943,15 @@ def main():
         st.caption(normalized["conversion_note"])
 
     news_items = fetch_news(snapshot["company_name"])
+    
+    # APIキーの状態を確認
+    if effective_google_key:
+        st.info(f"🔑 Google APIキーが設定されています（モデル: {effective_gemini_model}）。Gemini APIを使用して分析します。")
+    elif effective_openai_key:
+        st.info("🔑 OpenAI APIキーが設定されています。OpenAI APIを使用して分析します。")
+    else:
+        st.warning("⚠️ APIキーが設定されていません。ヒューリスティック分析を使用します。")
+    
     with st.spinner("AIが分析中..."):
         analysis = generate_ai_analysis(
             effective_openai_key,
