@@ -237,6 +237,69 @@ def enable_chrome_password_manager_support():
     st.markdown(CHROME_PASSWORD_MANAGER_SCRIPT, unsafe_allow_html=True)
 
 
+CHROME_PASSWORD_SAVE_SCRIPT = """
+<script>
+(function triggerChromePasswordSave() {
+    const doc = window.parent?.document || window.document;
+    const targets = [
+        { id: "openai_api_key", label: "OpenAI API Key" },
+        { id: "google_ai_studio_api_key", label: "Google AI Studio API Key" },
+        { id: "gemini_model_id", label: "Gemini モデルID" },
+    ];
+
+    function collect() {
+        return targets
+            .map(({ id, label }) => {
+                const input = doc.getElementById(id);
+                if (!input) {
+                    return null;
+                }
+                const value = input.value?.trim();
+                if (!value) {
+                    return null;
+                }
+                return { id, label, value };
+            })
+            .filter(Boolean);
+    }
+
+    const payloads = collect();
+    if (!payloads.length) {
+        console.info("[ChromeSave] No API fields contained values.");
+        return;
+    }
+    if (!navigator.credentials || typeof PasswordCredential === "undefined") {
+        console.warn("[ChromeSave] Credential Management API is unavailable in this browser.");
+        return;
+    }
+
+    (async () => {
+        for (const payload of payloads) {
+            try {
+                const credential = new PasswordCredential({
+                    id: `${payload.id}@ai-dashboard`,
+                    name: payload.label,
+                    password: payload.value,
+                });
+                await navigator.credentials.store(credential);
+            } catch (error) {
+                console.error("[ChromeSave] Failed to store credential", payload.id, error);
+            }
+        }
+        window.dispatchEvent(
+            new CustomEvent("chrome-password-save:done", { detail: { count: payloads.length } })
+        );
+    })();
+})();
+</script>
+"""
+
+
+def trigger_chrome_password_save():
+    """Render the JS snippet that asks Chrome to save current API credentials."""
+    st.markdown(CHROME_PASSWORD_SAVE_SCRIPT, unsafe_allow_html=True)
+
+
 def build_ai_user_prompt(payload: Dict) -> str:
     return (
         "マーケットデータ:\n"
@@ -510,7 +573,8 @@ def heuristic_analysis(snapshot: Dict) -> Dict:
         "score": score,
         "bullet_points": bullets[:3],
         "scenario": scenario,
-        "analysis_comment": "AIキー未入力のため統計ベースの暫定コメントです。",
+        "analysis_comment": "外部AIレスポンスを取得できなかったため統計ベースの暫定コメントです。",
+        "source": "heuristic",
     }
 
 
@@ -518,6 +582,24 @@ def _sanitize_ai_response(parsed: Dict) -> Dict:
     parsed = parsed or {}
     parsed["bullet_points"] = (parsed.get("bullet_points") or [])[:3]
     return parsed
+
+
+def parse_ai_json_payload(message: Optional[str]) -> Optional[Dict]:
+    """Accept AI responses with code fences or extra text and extract JSON."""
+    if not message:
+        return None
+    cleaned = message.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"```$", "", cleaned).strip()
+    brace_start = cleaned.find("{")
+    brace_end = cleaned.rfind("}")
+    if brace_start != -1 and brace_end != -1:
+        cleaned = cleaned[brace_start : brace_end + 1]
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
 
 
 def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[Dict]:
@@ -534,8 +616,11 @@ def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[D
                 {"role": "user", "content": build_ai_user_prompt(payload)},
             ],
         )
-        message = response.choices[0].message.content
-        parsed = json.loads(message)
+        message = response.choices[0].message.content if response.choices else None
+        parsed = parse_ai_json_payload(message)
+        if not parsed:
+            return None
+        parsed["source"] = "openai"
         return _sanitize_ai_response(parsed)
     except Exception:  # pragma: no cover - API failure
         return None
@@ -572,7 +657,10 @@ def request_gemini_analysis(
                 message = getattr(first_part, "text", None) or getattr(first_part, "content", None)
         if not message:
             return None
-        parsed = json.loads(message)
+        parsed = parse_ai_json_payload(message)
+        if not parsed:
+            return None
+        parsed["source"] = "gemini"
         return _sanitize_ai_response(parsed)
     except Exception:  # pragma: no cover - API failure
         return None
@@ -656,6 +744,16 @@ def render_conclusion(analysis: Dict):
     </div>
     """
     st.markdown(conclusion_html, unsafe_allow_html=True)
+
+
+def describe_analysis_source(analysis: Dict) -> str:
+    source = (analysis or {}).get("source")
+    mapping = {
+        "gemini": "Gemini (Google AI Studio)",
+        "openai": "OpenAI GPT",
+        "heuristic": "ヒューリスティック（API未使用）",
+    }
+    return mapping.get(source, "ヒューリスティック（API未使用）")
 
 
 def render_tabs(analysis: Dict, snapshot: Dict, news_items: List[Dict]):
@@ -756,6 +854,17 @@ def main():
     )
     google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
     enable_chrome_password_manager_support()
+    st.markdown("#### 🔐 APIキーの保存")
+    st.caption("入力済みの API / モデル設定を Chrome のパスワードマネージャーに登録できます。")
+    save_to_chrome = st.button(
+        "APIキー設定をChromeに保存",
+        type="primary",
+        use_container_width=True,
+        help="Chrome のパスワードマネージャーへ保存するので、次回以降は自動入力できます。",
+    )
+    if save_to_chrome:
+        st.success("Chrome への保存をリクエストしました。ブラウザの保存ポップアップを確認してください。")
+        trigger_chrome_password_save()
 
     if not ticker_input:
         st.info("分析したいティッカーを入力してください。")
@@ -791,6 +900,7 @@ def main():
         )
 
     render_header(snapshot, analysis)
+    st.caption(f"AIエンジン出力: {describe_analysis_source(analysis)}")
     st.markdown("### ✅ 結論エリア")
     render_conclusion(analysis)
     st.markdown("### 📊 詳細エリア")
