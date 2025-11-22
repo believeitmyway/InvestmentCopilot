@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import re
@@ -680,6 +681,7 @@ def sort_news_by_date(news_items: List[Dict], reverse: bool = True) -> List[Dict
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -> List[Dict]:
+    """日本語の最新ニュースを確実に取得する関数"""
     if not query:
         return []
     
@@ -692,75 +694,151 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     
     news_items = []
     seen_urls = set()  # 重複チェック用
+    errors = []  # エラーログ用
     
     # 日本株の場合は日本語のニュースを優先的に取得
     if is_japanese_stock:
-        try:
-            with DDGS() as ddgs:
-                # 複数のキーワードパターンで検索してより多くの結果を取得
-                search_keywords = [
-                    f"{query} 株価 ニュース",
-                    f"{query} 株 最新",
-                    f"{query} 企業 ニュース",
-                ]
+        # より多様な検索キーワードパターン
+        search_keywords = [
+            f"{query} 株価 ニュース",
+            f"{query} 株 最新",
+            f"{query} 企業 ニュース",
+            f"{query} 最新ニュース",
+            f"{query} 決算",
+            f"{query} 業績",
+        ]
+        
+        # シンボルがある場合は追加の検索パターン
+        if symbol:
+            symbol_clean = symbol.replace(".T", "").strip()
+            if symbol_clean.isdigit():
+                search_keywords.extend([
+                    f"{symbol_clean} 株価",
+                    f"{symbol_clean} ニュース",
+                    f"{query} {symbol_clean}",
+                ])
+        
+        # 複数の検索を試行
+        for keywords in search_keywords:
+            try:
+                # timeoutパラメータはduckduckgo-searchのバージョンによってはサポートされていない可能性がある
+                try:
+                    ddgs_context = DDGS(timeout=10)
+                except TypeError:
+                    # timeoutパラメータがサポートされていない場合はデフォルトを使用
+                    ddgs_context = DDGS()
                 
-                for keywords in search_keywords:
-                    try:
-                        japanese_results = list(
-                            ddgs.news(
-                                keywords=keywords,
-                                region="jp-ja",
-                                safesearch="Off",
-                                max_results=max_results * 2,  # より多くの候補を取得
-                            )
+                with ddgs_context as ddgs:
+                    japanese_results = list(
+                        ddgs.news(
+                            keywords=keywords,
+                            region="jp-ja",
+                            safesearch="Off",
+                            max_results=max_results * 3,  # より多くの候補を取得
                         )
-                        for item in japanese_results:
-                            url = item.get("url", "")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                news_items.append(
-                                    {
-                                        "title": item.get("title"),
-                                        "url": url,
-                                        "snippet": item.get("body") or item.get("snippet"),
-                                        "published": item.get("date"),
-                                        "source": item.get("source"),
-                                        "language": "ja",
-                                    }
-                                )
-                    except Exception:
-                        continue
-        except Exception:  # pragma: no cover - network
-            pass
+                    )
+                    for item in japanese_results:
+                        url = item.get("url", "")
+                        title = item.get("title", "")
+                        if url and url not in seen_urls and title:
+                            seen_urls.add(url)
+                            news_items.append(
+                                {
+                                    "title": title,
+                                    "url": url,
+                                    "snippet": item.get("body") or item.get("snippet") or "",
+                                    "published": item.get("date"),
+                                    "source": item.get("source") or "",
+                                    "language": "ja",
+                                }
+                            )
+            except Exception as e:
+                error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
+                errors.append(error_msg)
+                # エラーをログに記録（Streamlitのログに出力）
+                logging.warning(error_msg)
+                continue
+        
+        # 日本語ニュースが取得できなかった場合、より広範囲な検索を試行
+        if len(news_items) == 0:
+            try:
+                try:
+                    ddgs_context = DDGS(timeout=10)
+                except TypeError:
+                    ddgs_context = DDGS()
+                
+                with ddgs_context as ddgs:
+                    # よりシンプルな検索クエリで再試行
+                    fallback_results = list(
+                        ddgs.news(
+                            keywords=query,
+                            region="jp-ja",
+                            safesearch="Off",
+                            max_results=max_results * 2,
+                        )
+                    )
+                    for item in fallback_results:
+                        url = item.get("url", "")
+                        title = item.get("title", "")
+                        if url and url not in seen_urls and title:
+                            seen_urls.add(url)
+                            news_items.append(
+                                {
+                                    "title": title,
+                                    "url": url,
+                                    "snippet": item.get("body") or item.get("snippet") or "",
+                                    "published": item.get("date"),
+                                    "source": item.get("source") or "",
+                                    "language": "ja",
+                                }
+                            )
+            except Exception as e:
+                error_msg = f"フォールバック検索でエラー: {str(e)}"
+                errors.append(error_msg)
+                logging.warning(error_msg)
     
     # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
     if not is_japanese_stock or len(news_items) < max_results:
         try:
-            with DDGS() as ddgs:
+            try:
+                ddgs_context = DDGS(timeout=10)
+            except TypeError:
+                ddgs_context = DDGS()
+            
+            with ddgs_context as ddgs:
                 english_results = list(
                     ddgs.news(
                         keywords=f"{query} stock",
                         region="us-en",
                         safesearch="Off",
-                        max_results=max_results * 2,  # より多くの候補を取得
+                        max_results=max_results * 2,
                     )
                 )
                 for item in english_results:
                     url = item.get("url", "")
-                    if url and url not in seen_urls:
+                    title = item.get("title", "")
+                    if url and url not in seen_urls and title:
                         seen_urls.add(url)
                         news_items.append(
                             {
-                                "title": item.get("title"),
+                                "title": title,
                                 "url": url,
-                                "snippet": item.get("body") or item.get("snippet"),
+                                "snippet": item.get("body") or item.get("snippet") or "",
                                 "published": item.get("date"),
-                                "source": item.get("source"),
+                                "source": item.get("source") or "",
                                 "language": "en",
                             }
                         )
-        except Exception:  # pragma: no cover - network
-            pass
+        except Exception as e:
+            error_msg = f"英語ニュース取得でエラー: {str(e)}"
+            errors.append(error_msg)
+            logging.warning(error_msg)
+    
+    # エラーが発生した場合はログに記録
+    if errors and len(news_items) == 0:
+        logging.error(f"ニュース取得に失敗しました。エラー数: {len(errors)}")
+        for err in errors[:3]:  # 最初の3つのエラーのみ表示
+            logging.error(err)
     
     # 最新のニュースのみをフィルタリング（過去30日以内）
     news_items = filter_recent_news(news_items, days_threshold=30)
@@ -1095,7 +1173,9 @@ def render_tabs(analysis: Dict, snapshot: Dict, news_items: List[Dict]):
 
         st.markdown("**関連ニュース**")
         if not news_items:
-            st.write("最新ニュースの取得に失敗しました。")
+            st.warning("最新ニュースの取得に失敗しました。ネットワーク接続や検索サービスの状態を確認してください。")
+        else:
+            st.caption(f"📰 {len(news_items)} 件のニュースを取得しました")
         for news in news_items:
             st.markdown(
                 f'<div class="news-item"><a class="news-title" href="{news["url"]}" target="_blank">{news["title"]}</a>'
@@ -1221,7 +1301,14 @@ def main():
     if normalized.get("conversion_note"):
         st.caption(normalized["conversion_note"])
 
-    news_items = fetch_news(snapshot["company_name"], symbol=snapshot.get("symbol"))
+    with st.spinner("最新ニュースを取得中..."):
+        news_items = fetch_news(snapshot["company_name"], symbol=snapshot.get("symbol"))
+    
+    # ニュース取得結果のフィードバック
+    if not news_items:
+        st.warning("⚠️ 最新ニュースの取得に失敗しました。ネットワーク接続や検索サービスの状態を確認してください。")
+    elif len(news_items) < 3:
+        st.info(f"ℹ️ ニュースを {len(news_items)} 件取得しました（目標: 5件）。")
     
     # APIキーの状態を確認
     if effective_google_key:
