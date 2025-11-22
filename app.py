@@ -588,12 +588,24 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(query: str, max_results: int = 5) -> List[Dict]:
+def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -> List[Dict]:
     if not query:
         return []
+    
+    # 日本株かどうかを判定（.Tで終わる、または4桁の数字）
+    is_japanese_stock = False
+    if symbol:
+        symbol_upper = symbol.upper().strip()
+        if symbol_upper.endswith(".T") or (symbol_upper.isdigit() and 4 <= len(symbol_upper) <= 5):
+            is_japanese_stock = True
+    
+    news_items = []
+    seen_urls = set()  # 重複チェック用
+    
+    # 英語のニュースを取得
     try:
         with DDGS() as ddgs:
-            results = list(
+            english_results = list(
                 ddgs.news(
                     keywords=f"{query} stock",
                     region="us-en",
@@ -601,21 +613,54 @@ def fetch_news(query: str, max_results: int = 5) -> List[Dict]:
                     max_results=max_results,
                 )
             )
+            for item in english_results:
+                url = item.get("url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    news_items.append(
+                        {
+                            "title": item.get("title"),
+                            "url": url,
+                            "snippet": item.get("body") or item.get("snippet"),
+                            "published": item.get("date"),
+                            "source": item.get("source"),
+                            "language": "en",
+                        }
+                    )
     except Exception:  # pragma: no cover - network
-        return []
-
-    news_items = []
-    for item in results[:max_results]:
-        news_items.append(
-            {
-                "title": item.get("title"),
-                "url": item.get("url"),
-                "snippet": item.get("body") or item.get("snippet"),
-                "published": item.get("date"),
-                "source": item.get("source"),
-            }
-        )
-    return news_items
+        pass
+    
+    # 日本株の場合は日本語のニュースも取得
+    if is_japanese_stock:
+        try:
+            with DDGS() as ddgs:
+                japanese_results = list(
+                    ddgs.news(
+                        keywords=f"{query} 株",
+                        region="jp-ja",
+                        safesearch="Off",
+                        max_results=max_results,
+                    )
+                )
+                for item in japanese_results:
+                    url = item.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        news_items.append(
+                            {
+                                "title": item.get("title"),
+                                "url": url,
+                                "snippet": item.get("body") or item.get("snippet"),
+                                "published": item.get("date"),
+                                "source": item.get("source"),
+                                "language": "ja",
+                            }
+                        )
+        except Exception:  # pragma: no cover - network
+            pass
+    
+    # max_resultsまでに制限
+    return news_items[:max_results]
 
 
 def build_analysis_payload(snapshot: Dict, news_items: List[Dict]) -> Dict:
@@ -1067,7 +1112,7 @@ def main():
     if normalized.get("conversion_note"):
         st.caption(normalized["conversion_note"])
 
-    news_items = fetch_news(snapshot["company_name"])
+    news_items = fetch_news(snapshot["company_name"], symbol=snapshot.get("symbol"))
     
     # APIキーの状態を確認
     if effective_google_key:
