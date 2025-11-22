@@ -462,16 +462,26 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
 
     price = safe_fast_info_get(fast_info, "last_price") or info.get("currentPrice")
     if price is None and not hist.empty:
-        price = float(hist["Close"].iloc[-1])
+        try:
+            last_close = hist["Close"].iloc[-1]
+            if not (isinstance(last_close, float) and math.isnan(last_close)):
+                price = float(last_close)
+        except (IndexError, KeyError, ValueError, TypeError):
+            pass
 
     prev_close = safe_fast_info_get(fast_info, "previous_close") or info.get("previousClose")
     if prev_close is None and not hist.empty and len(hist) > 1:
-        prev_close = float(hist["Close"].iloc[-2])
+        try:
+            prev_close_value = hist["Close"].iloc[-2]
+            if not (isinstance(prev_close_value, float) and math.isnan(prev_close_value)):
+                prev_close = float(prev_close_value)
+        except (IndexError, KeyError, ValueError, TypeError):
+            pass
 
     day_change = day_change_pct = None
-    if price is not None and prev_close:
+    if price is not None and prev_close is not None and prev_close != 0:
         day_change = price - prev_close
-        day_change_pct = (day_change / prev_close) * 100 if prev_close else None
+        day_change_pct = (day_change / prev_close) * 100
 
     currency = (
         safe_fast_info_get(fast_info, "currency")
@@ -482,22 +492,68 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
 
     target_mean_price = info.get("targetMeanPrice")
     target_gap_pct = None
-    if price and target_mean_price:
+    if price is not None and price != 0 and target_mean_price is not None:
         target_gap_pct = ((target_mean_price - price) / price) * 100
 
     inst_pct = info.get("institutionPercent")
-    if inst_pct is not None and inst_pct <= 1:
-        inst_pct = inst_pct * 100
+    # 機関投資家保有比率: 0-1の範囲の小数（例：0.75 = 75%）の場合は100を掛けてパーセンテージに変換
+    if inst_pct is not None:
+        if 0 <= inst_pct <= 1:
+            inst_pct = inst_pct * 100
+        # 既にパーセンテージ形式（1より大きい）の場合はそのまま使用
+        elif inst_pct < 0:
+            inst_pct = None  # 負の値は無効
+
+    # 配当利回り: yfinanceは0-1の範囲の小数（例：0.05 = 5%）で返すため、100を掛けてパーセンテージに変換
+    # ただし、既にパーセンテージ形式（1.0以上）で返される場合もあるため、両方に対応
+    dividend_yield_raw = info.get("dividendYield")
+    dividend_yield_pct = None
+    if dividend_yield_raw is not None:
+        try:
+            dividend_yield_float = float(dividend_yield_raw)
+            # 負の値は無効
+            if dividend_yield_float < 0:
+                dividend_yield_pct = None
+            # 1.0以上の場合、既にパーセンテージ形式と判断（ただし100を超える場合は異常値の可能性）
+            elif dividend_yield_float >= 1.0:
+                # 100を超える場合は異常値の可能性があるため、警告を出すかNoneを返す
+                if dividend_yield_float > 100:
+                    dividend_yield_pct = None  # 異常値として無視
+                else:
+                    dividend_yield_pct = dividend_yield_float
+            # 0-1の範囲の場合、小数形式と判断して100を掛ける
+            else:
+                dividend_yield_pct = dividend_yield_float * 100
+        except (ValueError, TypeError):
+            dividend_yield_pct = None
+
+    def safe_get_metric(key: str):
+        """安全に指標を取得し、NaNや無効な値をNoneに変換"""
+        value = info.get(key)
+        if value is None:
+            return None
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        if isinstance(value, (int, float)) and math.isinf(value):
+            # 無限大は無効
+            return None
+        # 負の値が有効な指標（EPS、Betaなど）
+        if key in ["trailingEps", "beta"]:
+            return value
+        # その他の指標で負の値は無効
+        if isinstance(value, (int, float)) and value < 0:
+            return None
+        return value
 
     key_metrics = {
-        "trailingPE": info.get("trailingPE"),
-        "forwardPE": info.get("forwardPE"),
-        "pegRatio": info.get("pegRatio"),
-        "priceToBook": info.get("priceToBook"),
-        "trailingEps": info.get("trailingEps"),
-        "dividendYield": info.get("dividendYield", 0) * 100 if info.get("dividendYield") else None,
-        "beta": info.get("beta"),
-        "marketCap": info.get("marketCap"),
+        "trailingPE": safe_get_metric("trailingPE"),
+        "forwardPE": safe_get_metric("forwardPE"),
+        "pegRatio": safe_get_metric("pegRatio"),
+        "priceToBook": safe_get_metric("priceToBook"),
+        "trailingEps": safe_get_metric("trailingEps"),  # EPSは負の値も有効
+        "dividendYield": dividend_yield_pct,
+        "beta": safe_get_metric("beta"),
+        "marketCap": safe_get_metric("marketCap"),
     }
 
     analyst_snapshot = {
