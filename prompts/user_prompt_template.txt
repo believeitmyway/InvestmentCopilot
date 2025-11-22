@@ -1,0 +1,12 @@
+マーケットデータ:
+{market_data}
+
+出力フォーマット(JSON):
+{{
+"verdict_short":"",
+"action":"Buy | Sell | Hold",
+"score":0,
+"bullet_points":["","", ""],
+"scenario":{{"bullish_case":"","bearish_case":"","competitive_edge":""}},
+"analysis_comment":""
+}}
