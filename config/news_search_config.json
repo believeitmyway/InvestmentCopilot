@@ -1,0 +1,129 @@
+{
+  "search": {
+    "max_results": 15,
+    "multipliers": {
+      "initial_japanese": 8,
+      "fallback_japanese": 4,
+      "english": 5
+    },
+    "min_candidates": {
+      "initial_japanese": 50,
+      "fallback_japanese": 30,
+      "english": 30
+    },
+    "timeout": 10,
+    "article_fetch_timeout": 8
+  },
+  "keywords": {
+    "japanese_search_templates": [
+      "{company_name} 決算 業績",
+      "{company_name} 決算発表",
+      "{company_name} 業績発表",
+      "{company_name} IR 投資家向け説明会",
+      "{company_name} 株主総会",
+      "{company_name} M&A 買収 合併",
+      "{company_name} 大型投資 戦略発表",
+      "{company_name} 株価 ニュース",
+      "{company_name} 株 最新",
+      "{company_name} 企業 ニュース",
+      "{company_name} 最新ニュース"
+    ],
+    "japanese_symbol_templates": [
+      "{symbol} 株価",
+      "{symbol} ニュース",
+      "{symbol} 決算",
+      "{symbol} 業績"
+    ],
+    "japanese_combined_templates": [
+      "{symbol} {company_name}",
+      "{company_name} {symbol}"
+    ],
+    "english_search_templates": [
+      "{query} earnings results",
+      "{query} quarterly results",
+      "{query} financial results",
+      "{query} acquisition merger",
+      "{query} strategic announcement",
+      "{query} stock news",
+      "{query} stock"
+    ]
+  },
+  "scoring": {
+    "focus_score": {
+      "company_name_in_title": 10,
+      "company_name_in_snippet": 5,
+      "company_name_count_multiplier": 2,
+      "company_name_count_max": 10,
+      "symbol_in_title": 8,
+      "symbol_in_snippet": 4,
+      "symbol_count_multiplier": 2,
+      "symbol_count_max": 8,
+      "query_in_title": 6,
+      "query_in_snippet": 3,
+      "deep_analysis_bonus": 2
+    },
+    "importance_score": {
+      "keyword_score": 2
+    }
+  },
+  "keywords_for_scoring": {
+    "shallow_article": {
+      "japanese": [
+        "ランキング", "トップ", "上位", "ベスト", "ワースト",
+        "市場動向", "相場概況", "市況", "マーケットサマリー",
+        "株価ランキング", "上昇ランキング", "下落ランキング",
+        "注目銘柄", "人気銘柄", "急騰銘柄", "急落銘柄",
+        "日経平均", "TOPIX", "ダウ平均", "ナスダック",
+        "市場総括", "相場総括", "市況レポート",
+        "複数銘柄", "多数銘柄", "各銘柄", "各社"
+      ],
+      "english": [
+        "ranking", "top", "best", "worst", "list",
+        "market overview", "market summary", "market wrap",
+        "stock ranking", "gainers", "losers", "most active",
+        "market movers", "market recap", "daily wrap",
+        "multiple stocks", "several stocks", "various stocks"
+      ]
+    },
+    "important": {
+      "japanese": [
+        "決算", "業績", "業績発表", "決算発表", "決算説明会",
+        "ir", "投資家向け説明会", "株主総会",
+        "m&a", "買収", "合併", "統合", "提携",
+        "大型投資", "戦略発表", "経営方針", "中期経営計画",
+        "上場", "ipo", "増資", "減資", "配当",
+        "不祥事", "コンプライアンス", "リコール"
+      ],
+      "english": [
+        "earnings", "quarterly", "annual", "results", "financial results",
+        "acquisition", "merger", "m&a", "partnership",
+        "ipo", "dividend", "buyback", "strategic",
+        "recall", "scandal", "compliance"
+      ]
+    },
+    "deep_analysis": {
+      "japanese": [
+        "戦略", "経営方針", "中期経営計画", "事業戦略",
+        "業績分析", "財務分析", "投資判断", "投資評価",
+        "競争力", "競合分析", "市場シェア", "事業展開",
+        "IR説明会", "決算説明会", "投資家説明会"
+      ],
+      "english": [
+        "strategy", "business plan", "financial analysis",
+        "investment thesis", "competitive", "market share",
+        "earnings call", "investor day", "analyst meeting"
+      ]
+    }
+  },
+  "filtering": {
+    "date_threshold_days": 365,
+    "shallow_article": {
+      "min_stock_codes": 3
+    },
+    "focus_score": {
+      "min_focus_score": 0,
+      "min_importance_score_when_focus_zero": 4
+    },
+    "fallback_sufficient_threshold_multiplier": 2
+  }
+}

@@ -238,8 +238,169 @@ def load_user_prompt_template() -> str:
     return load_prompt_file("user_prompt_template.txt", default)
 
 
+def load_news_search_config() -> Dict:
+    """ニュース検索設定ファイルを読み込む"""
+    config_dir = os.path.join(os.path.dirname(__file__), "config")
+    filepath = os.path.join(config_dir, "news_search_config.json")
+    
+    default_config = {
+        "search": {
+            "max_results": 15,
+            "multipliers": {
+                "initial_japanese": 8,
+                "fallback_japanese": 4,
+                "english": 5
+            },
+            "min_candidates": {
+                "initial_japanese": 50,
+                "fallback_japanese": 30,
+                "english": 30
+            },
+            "timeout": 10,
+            "article_fetch_timeout": 8
+        },
+        "keywords": {
+            "japanese_search_templates": [
+                "{company_name} 決算 業績",
+                "{company_name} 決算発表",
+                "{company_name} 業績発表",
+                "{company_name} IR 投資家向け説明会",
+                "{company_name} 株主総会",
+                "{company_name} M&A 買収 合併",
+                "{company_name} 大型投資 戦略発表",
+                "{company_name} 株価 ニュース",
+                "{company_name} 株 最新",
+                "{company_name} 企業 ニュース",
+                "{company_name} 最新ニュース"
+            ],
+            "japanese_symbol_templates": [
+                "{symbol} 株価",
+                "{symbol} ニュース",
+                "{symbol} 決算",
+                "{symbol} 業績"
+            ],
+            "japanese_combined_templates": [
+                "{symbol} {company_name}",
+                "{company_name} {symbol}"
+            ],
+            "english_search_templates": [
+                "{query} earnings results",
+                "{query} quarterly results",
+                "{query} financial results",
+                "{query} acquisition merger",
+                "{query} strategic announcement",
+                "{query} stock news",
+                "{query} stock"
+            ]
+        },
+        "scoring": {
+            "focus_score": {
+                "company_name_in_title": 10,
+                "company_name_in_snippet": 5,
+                "company_name_count_multiplier": 2,
+                "company_name_count_max": 10,
+                "symbol_in_title": 8,
+                "symbol_in_snippet": 4,
+                "symbol_count_multiplier": 2,
+                "symbol_count_max": 8,
+                "query_in_title": 6,
+                "query_in_snippet": 3,
+                "deep_analysis_bonus": 2
+            },
+            "importance_score": {
+                "keyword_score": 2
+            }
+        },
+        "keywords_for_scoring": {
+            "shallow_article": {
+                "japanese": [
+                    "ランキング", "トップ", "上位", "ベスト", "ワースト",
+                    "市場動向", "相場概況", "市況", "マーケットサマリー",
+                    "株価ランキング", "上昇ランキング", "下落ランキング",
+                    "注目銘柄", "人気銘柄", "急騰銘柄", "急落銘柄",
+                    "日経平均", "TOPIX", "ダウ平均", "ナスダック",
+                    "市場総括", "相場総括", "市況レポート",
+                    "複数銘柄", "多数銘柄", "各銘柄", "各社"
+                ],
+                "english": [
+                    "ranking", "top", "best", "worst", "list",
+                    "market overview", "market summary", "market wrap",
+                    "stock ranking", "gainers", "losers", "most active",
+                    "market movers", "market recap", "daily wrap",
+                    "multiple stocks", "several stocks", "various stocks"
+                ]
+            },
+            "important": {
+                "japanese": [
+                    "決算", "業績", "業績発表", "決算発表", "決算説明会",
+                    "ir", "投資家向け説明会", "株主総会",
+                    "m&a", "買収", "合併", "統合", "提携",
+                    "大型投資", "戦略発表", "経営方針", "中期経営計画",
+                    "上場", "ipo", "増資", "減資", "配当",
+                    "不祥事", "コンプライアンス", "リコール"
+                ],
+                "english": [
+                    "earnings", "quarterly", "annual", "results", "financial results",
+                    "acquisition", "merger", "m&a", "partnership",
+                    "ipo", "dividend", "buyback", "strategic",
+                    "recall", "scandal", "compliance"
+                ]
+            },
+            "deep_analysis": {
+                "japanese": [
+                    "戦略", "経営方針", "中期経営計画", "事業戦略",
+                    "業績分析", "財務分析", "投資判断", "投資評価",
+                    "競争力", "競合分析", "市場シェア", "事業展開",
+                    "IR説明会", "決算説明会", "投資家説明会"
+                ],
+                "english": [
+                    "strategy", "business plan", "financial analysis",
+                    "investment thesis", "competitive", "market share",
+                    "earnings call", "investor day", "analyst meeting"
+                ]
+            }
+        },
+        "filtering": {
+            "date_threshold_days": 365,
+            "shallow_article": {
+                "min_stock_codes": 3
+            },
+            "focus_score": {
+                "min_focus_score": 0,
+                "min_importance_score_when_focus_zero": 4
+            },
+            "fallback_sufficient_threshold_multiplier": 2
+        }
+    }
+    
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            loaded_config = json.load(f)
+            # デフォルト設定と深いマージ（ファイルにない項目はデフォルトを使用）
+            def deep_merge(default: Dict, loaded: Dict) -> Dict:
+                """深いマージを行う（ネストされた辞書もマージ）"""
+                result = default.copy()
+                for key, value in loaded.items():
+                    if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                        result[key] = deep_merge(result[key], value)
+                    else:
+                        result[key] = value
+                return result
+            return deep_merge(default_config, loaded_config)
+    except FileNotFoundError:
+        print(f"警告: 設定ファイルが見つかりません: {filepath}。デフォルト値を使用します。")
+        return default_config
+    except json.JSONDecodeError as e:
+        print(f"警告: 設定ファイルのJSON解析エラー ({filepath}): {e}。デフォルト値を使用します。")
+        return default_config
+    except Exception as e:
+        print(f"警告: 設定ファイルの読み込みエラー ({filepath}): {e}。デフォルト値を使用します。")
+        return default_config
+
+
 AI_SYSTEM_PROMPT = load_system_prompt()
 USER_PROMPT_TEMPLATE = load_user_prompt_template()
+NEWS_SEARCH_CONFIG = load_news_search_config()
 
 GOOGLE_API_KEY_ENV_ORDER = [
     "GOOGLE_API_KEY",
@@ -798,29 +959,16 @@ def filter_recent_news(news_items: List[Dict], days_threshold: int = 30) -> List
 
 def is_shallow_article(item: Dict, company_name: Optional[str] = None, symbol: Optional[str] = None) -> bool:
     """ランキングや市場動向のような薄い記事かを判定"""
+    config = NEWS_SEARCH_CONFIG.get("keywords_for_scoring", {}).get("shallow_article", {})
+    shallow_keywords_ja = config.get("japanese", [])
+    shallow_keywords_en = config.get("english", [])
+    
+    filtering_config = NEWS_SEARCH_CONFIG.get("filtering", {}).get("shallow_article", {})
+    min_stock_codes = filtering_config.get("min_stock_codes", 3)
+    
     title = (item.get("title") or "").lower()
     snippet = (item.get("snippet") or "").lower()
     text = f"{title} {snippet}"
-    
-    # 薄い記事を示すキーワード（日本語）
-    shallow_keywords_ja = [
-        "ランキング", "トップ", "上位", "ベスト", "ワースト",
-        "市場動向", "相場概況", "市況", "マーケットサマリー",
-        "株価ランキング", "上昇ランキング", "下落ランキング",
-        "注目銘柄", "人気銘柄", "急騰銘柄", "急落銘柄",
-        "日経平均", "TOPIX", "ダウ平均", "ナスダック",
-        "市場総括", "相場総括", "市況レポート",
-        "複数銘柄", "多数銘柄", "各銘柄", "各社",
-    ]
-    
-    # 薄い記事を示すキーワード（英語）
-    shallow_keywords_en = [
-        "ranking", "top", "best", "worst", "list",
-        "market overview", "market summary", "market wrap",
-        "stock ranking", "gainers", "losers", "most active",
-        "market movers", "market recap", "daily wrap",
-        "multiple stocks", "several stocks", "various stocks",
-    ]
     
     # タイトルにランキングや市場動向のキーワードが含まれているか
     for keyword in shallow_keywords_ja + shallow_keywords_en:
@@ -832,18 +980,18 @@ def is_shallow_article(item: Dict, company_name: Optional[str] = None, symbol: O
                 continue
             return True
     
-    # 複数の銘柄コードが含まれている場合（3つ以上）は薄い記事の可能性が高い
+    # 複数の銘柄コードが含まれている場合（設定値以上）は薄い記事の可能性が高い
     if symbol:
         symbol_clean = symbol.replace(".T", "").strip()
         if symbol_clean.isdigit():
-            # 4桁の数字（銘柄コード）が3つ以上含まれているか
+            # 4桁の数字（銘柄コード）が設定値以上含まれているか
             stock_codes = re.findall(r'\b\d{4}\b', text)
-            if len(stock_codes) >= 3:
+            if len(stock_codes) >= min_stock_codes:
                 # 対象銘柄が含まれていても、他の銘柄が多く含まれている場合は薄い記事
                 if symbol_clean not in stock_codes:
                     return True
-                # 対象銘柄が含まれていても、3つ以上の銘柄が含まれている場合は市場動向記事の可能性が高い
-                if len(set(stock_codes)) >= 3:
+                # 対象銘柄が含まれていても、設定値以上の銘柄が含まれている場合は市場動向記事の可能性が高い
+                if len(set(stock_codes)) >= min_stock_codes:
                     return True
     
     return False
@@ -851,6 +999,11 @@ def is_shallow_article(item: Dict, company_name: Optional[str] = None, symbol: O
 
 def calculate_focus_score(item: Dict, company_name: Optional[str] = None, symbol: Optional[str] = None, query: Optional[str] = None) -> int:
     """対象銘柄への焦点度をスコア化（高いほど対象銘柄に焦点を当てている）"""
+    scoring_config = NEWS_SEARCH_CONFIG.get("scoring", {}).get("focus_score", {})
+    keywords_config = NEWS_SEARCH_CONFIG.get("keywords_for_scoring", {}).get("deep_analysis", {})
+    deep_analysis_keywords_ja = keywords_config.get("japanese", [])
+    deep_analysis_keywords_en = keywords_config.get("english", [])
+    
     title = (item.get("title") or "").lower()
     snippet = (item.get("snippet") or "").lower()
     text = f"{title} {snippet}"
@@ -861,83 +1014,64 @@ def calculate_focus_score(item: Dict, company_name: Optional[str] = None, symbol
     if company_name:
         company_name_lower = company_name.lower()
         if company_name_lower in title:
-            score += 10  # タイトルに含まれている場合は高スコア
+            score += scoring_config.get("company_name_in_title", 10)
         if company_name_lower in snippet:
-            score += 5  # 本文に含まれている場合もスコア加算
+            score += scoring_config.get("company_name_in_snippet", 5)
         
         # 対象銘柄名の出現回数をカウント
         count = text.count(company_name_lower)
-        score += min(count * 2, 10)  # 最大10点まで
+        multiplier = scoring_config.get("company_name_count_multiplier", 2)
+        max_score = scoring_config.get("company_name_count_max", 10)
+        score += min(count * multiplier, max_score)
     
     # ティッカーシンボルが含まれている場合もスコア加算
     if symbol:
         symbol_clean = symbol.replace(".T", "").strip().lower()
         if symbol_clean in title:
-            score += 8
+            score += scoring_config.get("symbol_in_title", 8)
         if symbol_clean in snippet:
-            score += 4
+            score += scoring_config.get("symbol_in_snippet", 4)
         
         # ティッカーシンボルの出現回数をカウント
         count = text.count(symbol_clean)
-        score += min(count * 2, 8)  # 最大8点まで
+        multiplier = scoring_config.get("symbol_count_multiplier", 2)
+        max_score = scoring_config.get("symbol_count_max", 8)
+        score += min(count * multiplier, max_score)
     
     # クエリ（英語の社名など）が含まれている場合もスコア加算
     if query:
         query_lower = query.lower()
         if query_lower in title:
-            score += 6
+            score += scoring_config.get("query_in_title", 6)
         if query_lower in snippet:
-            score += 3
+            score += scoring_config.get("query_in_snippet", 3)
     
     # 深い分析を示すキーワードが含まれている場合はボーナス
-    deep_analysis_keywords_ja = [
-        "戦略", "経営方針", "中期経営計画", "事業戦略",
-        "業績分析", "財務分析", "投資判断", "投資評価",
-        "競争力", "競合分析", "市場シェア", "事業展開",
-        "IR説明会", "決算説明会", "投資家説明会",
-    ]
-    
-    deep_analysis_keywords_en = [
-        "strategy", "business plan", "financial analysis",
-        "investment thesis", "competitive", "market share",
-        "earnings call", "investor day", "analyst meeting",
-    ]
-    
+    bonus = scoring_config.get("deep_analysis_bonus", 2)
     for keyword in deep_analysis_keywords_ja + deep_analysis_keywords_en:
         if keyword in text:
-            score += 2
+            score += bonus
     
     return score
 
 
 def calculate_news_importance_score(item: Dict) -> int:
     """ニュースの重要度スコアを計算（重要キーワードが含まれているか）"""
+    keywords_config = NEWS_SEARCH_CONFIG.get("keywords_for_scoring", {}).get("important", {})
+    important_keywords_ja = keywords_config.get("japanese", [])
+    important_keywords_en = keywords_config.get("english", [])
+    
+    scoring_config = NEWS_SEARCH_CONFIG.get("scoring", {}).get("importance_score", {})
+    keyword_score = scoring_config.get("keyword_score", 2)
+    
     title = (item.get("title") or "").lower()
     snippet = (item.get("snippet") or "").lower()
     text = f"{title} {snippet}"
     
-    # 重要度の高いキーワード（日本語）
-    important_keywords_ja = [
-        "決算", "業績", "業績発表", "決算発表", "決算説明会",
-        "ir", "投資家向け説明会", "株主総会",
-        "m&a", "買収", "合併", "統合", "提携",
-        "大型投資", "戦略発表", "経営方針", "中期経営計画",
-        "上場", "ipo", "増資", "減資", "配当",
-        "不祥事", "コンプライアンス", "リコール",
-    ]
-    
-    # 重要度の高いキーワード（英語）
-    important_keywords_en = [
-        "earnings", "quarterly", "annual", "results", "financial results",
-        "acquisition", "merger", "m&a", "partnership",
-        "ipo", "dividend", "buyback", "strategic",
-        "recall", "scandal", "compliance",
-    ]
-    
     score = 0
     for keyword in important_keywords_ja + important_keywords_en:
         if keyword in text:
-            score += 2  # 重要キーワードが見つかったらスコアを加算
+            score += keyword_score  # 重要キーワードが見つかったらスコアを加算
     
     return score
 
@@ -1400,6 +1534,31 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     if not query:
         return []
     
+    # 設定ファイルからパラメータを読み込む
+    config = NEWS_SEARCH_CONFIG.get("search", {})
+    keywords_config = NEWS_SEARCH_CONFIG.get("keywords", {})
+    filtering_config = NEWS_SEARCH_CONFIG.get("filtering", {})
+    
+    # 検索パラメータ
+    default_max_results = config.get("max_results", 15)
+    max_results = max_results if max_results != 15 else default_max_results
+    multipliers = config.get("multipliers", {})
+    min_candidates = config.get("min_candidates", {})
+    timeout = config.get("timeout", 10)
+    article_fetch_timeout = config.get("article_fetch_timeout", 8)
+    
+    # キーワードテンプレート
+    japanese_search_templates = keywords_config.get("japanese_search_templates", [])
+    japanese_symbol_templates = keywords_config.get("japanese_symbol_templates", [])
+    japanese_combined_templates = keywords_config.get("japanese_combined_templates", [])
+    english_search_templates = keywords_config.get("english_search_templates", [])
+    
+    # フィルタリングパラメータ
+    date_threshold_days = filtering_config.get("date_threshold_days", 365)
+    focus_filter_config = filtering_config.get("focus_score", {})
+    min_importance_score_when_focus_zero = focus_filter_config.get("min_importance_score_when_focus_zero", 4)
+    fallback_sufficient_threshold_multiplier = filtering_config.get("fallback_sufficient_threshold_multiplier", 2)
+    
     # 日本株かどうかを判定（.Tで終わる、または4桁の数字）
     is_japanese_stock = False
     symbol_clean = None
@@ -1425,56 +1584,30 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
         
         # 日本語の社名がある場合は、それを優先的に使用
         if japanese_company_name:
-            search_keywords.extend([
-                f"{japanese_company_name} 決算 業績",
-                f"{japanese_company_name} 決算発表",
-                f"{japanese_company_name} 業績発表",
-                f"{japanese_company_name} IR 投資家向け説明会",
-                f"{japanese_company_name} 株主総会",
-                f"{japanese_company_name} M&A 買収 合併",
-                f"{japanese_company_name} 大型投資 戦略発表",
-                f"{japanese_company_name} 株価 ニュース",
-                f"{japanese_company_name} 株 最新",
-                f"{japanese_company_name} 企業 ニュース",
-                f"{japanese_company_name} 最新ニュース",
-            ])
+            for template in japanese_search_templates:
+                search_keywords.append(template.format(company_name=japanese_company_name))
         
         # ティッカーシンボルでの検索も追加
         if symbol_clean and symbol_clean.isdigit():
-            search_keywords.extend([
-                f"{symbol_clean} 株価",
-                f"{symbol_clean} ニュース",
-                f"{symbol_clean} 決算",
-                f"{symbol_clean} 業績",
-            ])
+            for template in japanese_symbol_templates:
+                search_keywords.append(template.format(symbol=symbol_clean))
             # 日本語の社名がある場合は、ティッカーシンボルと組み合わせた検索も追加
             if japanese_company_name:
-                search_keywords.extend([
-                    f"{symbol_clean} {japanese_company_name}",
-                    f"{japanese_company_name} {symbol_clean}",
-                ])
+                for template in japanese_combined_templates:
+                    search_keywords.append(template.format(symbol=symbol_clean, company_name=japanese_company_name))
         
         # 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
-        search_keywords.extend([
-            f"{query} 決算 業績",
-            f"{query} 決算発表",
-            f"{query} 業績発表",
-            f"{query} IR 投資家向け説明会",
-            f"{query} 株主総会",
-            f"{query} M&A 買収 合併",
-            f"{query} 大型投資 戦略発表",
-            f"{query} 株価 ニュース",
-            f"{query} 株 最新",
-            f"{query} 企業 ニュース",
-            f"{query} 最新ニュース",
-        ])
+        for template in japanese_search_templates:
+            search_keywords.append(template.format(company_name=query))
         
         # 複数の検索を試行
+        initial_multiplier = multipliers.get("initial_japanese", 8)
+        initial_min_candidates = min_candidates.get("initial_japanese", 50)
         for keywords in search_keywords:
             try:
                 # timeoutパラメータはduckduckgo-searchのバージョンによってはサポートされていない可能性がある
                 try:
-                    ddgs_context = DDGS(timeout=10)
+                    ddgs_context = DDGS(timeout=timeout)
                 except TypeError:
                     # timeoutパラメータがサポートされていない場合はデフォルトを使用
                     ddgs_context = DDGS()
@@ -1485,7 +1618,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                             keywords=keywords,
                             region="jp-ja",
                             safesearch="Off",
-                            max_results=max(max_results * 8, 50),  # より多くの候補を取得（重要ニュースを優先）
+                            max_results=max(max_results * initial_multiplier, initial_min_candidates),
                         )
                     )
                     for item in japanese_results:
@@ -1519,10 +1652,12 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                 fallback_queries.append(symbol_clean)
             fallback_queries.append(query)
             
+            fallback_multiplier = multipliers.get("fallback_japanese", 4)
+            fallback_min_candidates = min_candidates.get("fallback_japanese", 30)
             for fallback_query in fallback_queries:
                 try:
                     try:
-                        ddgs_context = DDGS(timeout=10)
+                        ddgs_context = DDGS(timeout=timeout)
                     except TypeError:
                         ddgs_context = DDGS()
                     
@@ -1533,7 +1668,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                 keywords=fallback_query,
                                 region="jp-ja",
                                 safesearch="Off",
-                                max_results=max(max_results * 4, 30),
+                                max_results=max(max_results * fallback_multiplier, fallback_min_candidates),
                             )
                         )
                         for item in fallback_results:
@@ -1552,7 +1687,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                     }
                                 )
                         # 十分なニュースが取得できた場合はループを抜ける
-                        if len(news_items) >= max_results * 2:
+                        if len(news_items) >= max_results * fallback_sufficient_threshold_multiplier:
                             break
                 except Exception as e:
                     error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {str(e)}"
@@ -1563,20 +1698,16 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
     if not is_japanese_stock or len(news_items) < max_results:
         # 重要度の高いニュースを優先的に取得するための検索キーワード
-        english_keywords = [
-            f"{query} earnings results",
-            f"{query} quarterly results",
-            f"{query} financial results",
-            f"{query} acquisition merger",
-            f"{query} strategic announcement",
-            f"{query} stock news",
-            f"{query} stock",
-        ]
+        english_keywords = []
+        for template in english_search_templates:
+            english_keywords.append(template.format(query=query))
         
+        english_multiplier = multipliers.get("english", 5)
+        english_min_candidates = min_candidates.get("english", 30)
         for keywords in english_keywords:
             try:
                 try:
-                    ddgs_context = DDGS(timeout=10)
+                    ddgs_context = DDGS(timeout=timeout)
                 except TypeError:
                     ddgs_context = DDGS()
                 
@@ -1586,7 +1717,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                             keywords=keywords,
                             region="us-en",
                             safesearch="Off",
-                            max_results=max(max_results * 5, 30),  # より多くの候補を取得
+                            max_results=max(max_results * english_multiplier, english_min_candidates),
                         )
                     )
                     for item in english_results:
@@ -1616,8 +1747,8 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
         for err in errors[:3]:  # 最初の3つのエラーのみ表示
             logging.error(err)
     
-    # 最新のニュースのみをフィルタリング（過去1年以内）
-    news_items = filter_recent_news(news_items, days_threshold=365)
+    # 最新のニュースのみをフィルタリング（設定ファイルの日数以内）
+    news_items = filter_recent_news(news_items, days_threshold=date_threshold_days)
     
     # 薄い記事（ランキングや市場動向記事）を除外
     filtered_news_items = []
@@ -1651,8 +1782,8 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
         focus_score = calculate_focus_score(item, japanese_company_name or query, symbol, query)
         importance_score = calculate_news_importance_score(item)
         
-        # 焦点度が0かつ重要度も低い場合は除外
-        if focus_score == 0 and importance_score < 4:
+        # 焦点度が0かつ重要度も低い場合は除外（設定ファイルの閾値を使用）
+        if focus_score == 0 and importance_score < min_importance_score_when_focus_zero:
             low_focus_count += 1
             continue
         focus_filtered_items.append(item)
@@ -1674,7 +1805,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
         
         # 記事の全文を取得
         if url and original_snippet:
-            full_content = fetch_article_content(url, timeout=8)
+            full_content = fetch_article_content(url, timeout=article_fetch_timeout)
             if full_content:
                 # 全文が取得できた場合は、snippetを全文で置き換え
                 news_item["snippet"] = full_content
