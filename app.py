@@ -185,6 +185,8 @@ DEFAULT_GEMINI_MODEL = (
     or "gemini-1.5-flash"
 )
 
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+
 
 CHROME_PASSWORD_MANAGER_SCRIPT = """
 <script>
@@ -237,59 +239,58 @@ def enable_chrome_password_manager_support():
     st.markdown(CHROME_PASSWORD_MANAGER_SCRIPT, unsafe_allow_html=True)
 
 
-CHROME_PASSWORD_SAVE_SCRIPT = """
+CHROME_PASSWORD_SAVE_SCRIPT = f"""
 <script>
-(function triggerChromePasswordSave() {
+(function triggerChromePasswordSave() {{
     const doc = window.parent?.document || window.document;
-    const targets = [
-        { id: "openai_api_key", label: "OpenAI API Key" },
-        { id: "google_ai_studio_api_key", label: "Google AI Studio API Key" },
-        { id: "gemini_model_id", label: "Gemini モデルID" },
-    ];
 
-    function collect() {
-        return targets
-            .map(({ id, label }) => {
-                const input = doc.getElementById(id);
-                if (!input) {
-                    return null;
-                }
-                const value = input.value?.trim();
-                if (!value) {
-                    return null;
-                }
-                return { id, label, value };
-            })
-            .filter(Boolean);
-    }
+    function getValue(id) {{
+        const el = doc.getElementById(id);
+        return typeof el?.value === "string" ? el.value.trim() : "";
+    }}
 
-    const payloads = collect();
-    if (!payloads.length) {
+    const geminiModel = getValue("gemini_model_id") || "{DEFAULT_GEMINI_MODEL}";
+    const googleApiKey = getValue("google_ai_studio_api_key");
+    const openaiApiKey = getValue("openai_api_key");
+
+    const requests = [];
+    if (googleApiKey) {{
+        requests.push({{
+            id: geminiModel,
+            name: "Google AI Studio (" + geminiModel + ")",
+            password: googleApiKey,
+        }});
+    }}
+    if (openaiApiKey) {{
+        requests.push({{
+            id: "{OPENAI_DEFAULT_MODEL}",
+            name: "OpenAI API Key",
+            password: openaiApiKey,
+        }});
+    }}
+
+    if (!requests.length) {{
         console.info("[ChromeSave] No API fields contained values.");
         return;
-    }
-    if (!navigator.credentials || typeof PasswordCredential === "undefined") {
+    }}
+    if (!navigator.credentials || typeof PasswordCredential === "undefined") {{
         console.warn("[ChromeSave] Credential Management API is unavailable in this browser.");
         return;
-    }
+    }}
 
-    (async () => {
-        for (const payload of payloads) {
-            try {
-                const credential = new PasswordCredential({
-                    id: `${payload.id}@ai-dashboard`,
-                    name: payload.label,
-                    password: payload.value,
-                });
+    (async () => {{
+        for (const payload of requests) {{
+            try {{
+                const credential = new PasswordCredential(payload);
                 await navigator.credentials.store(credential);
-            } catch (error) {
+            }} catch (error) {{
                 console.error("[ChromeSave] Failed to store credential", payload.id, error);
-            }
-        }
+            }}
+        }}
         window.dispatchEvent(
-            new CustomEvent("chrome-password-save:done", { detail: { count: payloads.length } })
+            new CustomEvent("chrome-password-save:done", {{ detail: {{ count: requests.length }} }})
         );
-    })();
+    }})();
 })();
 </script>
 """
@@ -608,7 +609,7 @@ def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[D
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_DEFAULT_MODEL,
             temperature=0.2,
             response_format={"type": "json_object"},
             messages=[
