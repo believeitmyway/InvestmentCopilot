@@ -32,6 +32,7 @@ streamlit run app.py
 
 ## Chrome パスワードマネージャー連携
 - OpenAI / Google AI Studio の API キー、Gemini モデルID 各欄には `name` / `autocomplete` 属性を設定しているため、Google Chrome のパスワードマネージャーに資格情報として保存・自動入力できます。
+- 「APIキー設定をChromeに保存」ボタンを押すと、Credential Management API を通じて Chrome へ保存リクエストが送信されます。ポップアップが表示されたら保存を許可してください。
 - Chrome で保存するときは該当欄に値を入力し、表示される保存ポップアップで許可するだけで次回からワンクリック復元できます。
 - キーやモデルIDはブラウザ内でのみ使用され、サーバー側へは保存されません。
 
