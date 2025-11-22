@@ -660,6 +660,68 @@ def filter_recent_news(news_items: List[Dict], days_threshold: int = 30) -> List
     return filtered
 
 
+def calculate_news_importance_score(item: Dict) -> int:
+    """ニュースの重要度スコアを計算（重要キーワードが含まれているか）"""
+    title = (item.get("title") or "").lower()
+    snippet = (item.get("snippet") or "").lower()
+    text = f"{title} {snippet}"
+    
+    # 重要度の高いキーワード（日本語）
+    important_keywords_ja = [
+        "決算", "業績", "業績発表", "決算発表", "決算説明会",
+        "ir", "投資家向け説明会", "株主総会",
+        "m&a", "買収", "合併", "統合", "提携",
+        "大型投資", "戦略発表", "経営方針", "中期経営計画",
+        "上場", "ipo", "増資", "減資", "配当",
+        "不祥事", "コンプライアンス", "リコール",
+    ]
+    
+    # 重要度の高いキーワード（英語）
+    important_keywords_en = [
+        "earnings", "quarterly", "annual", "results", "financial results",
+        "acquisition", "merger", "m&a", "partnership",
+        "ipo", "dividend", "buyback", "strategic",
+        "recall", "scandal", "compliance",
+    ]
+    
+    score = 0
+    for keyword in important_keywords_ja + important_keywords_en:
+        if keyword in text:
+            score += 2  # 重要キーワードが見つかったらスコアを加算
+    
+    return score
+
+
+def sort_news_by_importance_and_date(news_items: List[Dict], reverse: bool = True) -> List[Dict]:
+    """ニュースを重要度と日付でソート（重要度が高い順、同じ重要度なら新しい順）"""
+    def get_sort_key(item: Dict) -> tuple:
+        # 重要度スコア（高い方が優先）
+        importance_score = calculate_news_importance_score(item)
+        
+        # 日付
+        date_str = item.get("published")
+        if not date_str:
+            # 日付がない場合は最も古い日付として扱う
+            parsed_date = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        else:
+            parsed_date = parse_news_date(date_str)
+            if parsed_date:
+                if parsed_date.tzinfo is None:
+                    parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+            else:
+                parsed_date = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        
+        # 重要度スコア（降順）、日付（降順）でソート
+        # reverse=Trueの場合、(-importance_score, -parsed_date.timestamp()) でソート
+        # reverse=Falseの場合、その逆
+        if reverse:
+            return (-importance_score, -parsed_date.timestamp())
+        else:
+            return (importance_score, parsed_date.timestamp())
+    
+    return sorted(news_items, key=get_sort_key)
+
+
 def sort_news_by_date(news_items: List[Dict], reverse: bool = True) -> List[Dict]:
     """ニュースを日付でソート（デフォルトは新しい順）"""
     def get_sort_key(item: Dict) -> datetime:
@@ -698,14 +760,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     
     # 日本株の場合は日本語のニュースを優先的に取得
     if is_japanese_stock:
-        # より多様な検索キーワードパターン
+        # 重要度の高いニュースを優先的に取得するための検索キーワードパターン
         search_keywords = [
+            f"{query} 決算 業績",
+            f"{query} 決算発表",
+            f"{query} 業績発表",
+            f"{query} IR 投資家向け説明会",
+            f"{query} 株主総会",
+            f"{query} M&A 買収 合併",
+            f"{query} 大型投資 戦略発表",
             f"{query} 株価 ニュース",
             f"{query} 株 最新",
             f"{query} 企業 ニュース",
             f"{query} 最新ニュース",
-            f"{query} 決算",
-            f"{query} 業績",
         ]
         
         # シンボルがある場合は追加の検索パターン
@@ -734,7 +801,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
                             keywords=keywords,
                             region="jp-ja",
                             safesearch="Off",
-                            max_results=max_results * 3,  # より多くの候補を取得
+                            max_results=max_results * 5,  # より多くの候補を取得（重要ニュースを優先）
                         )
                     )
                     for item in japanese_results:
@@ -799,40 +866,53 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     
     # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
     if not is_japanese_stock or len(news_items) < max_results:
-        try:
+        # 重要度の高いニュースを優先的に取得するための検索キーワード
+        english_keywords = [
+            f"{query} earnings results",
+            f"{query} quarterly results",
+            f"{query} financial results",
+            f"{query} acquisition merger",
+            f"{query} strategic announcement",
+            f"{query} stock news",
+            f"{query} stock",
+        ]
+        
+        for keywords in english_keywords:
             try:
-                ddgs_context = DDGS(timeout=10)
-            except TypeError:
-                ddgs_context = DDGS()
-            
-            with ddgs_context as ddgs:
-                english_results = list(
-                    ddgs.news(
-                        keywords=f"{query} stock",
-                        region="us-en",
-                        safesearch="Off",
-                        max_results=max_results * 2,
-                    )
-                )
-                for item in english_results:
-                    url = item.get("url", "")
-                    title = item.get("title", "")
-                    if url and url not in seen_urls and title:
-                        seen_urls.add(url)
-                        news_items.append(
-                            {
-                                "title": title,
-                                "url": url,
-                                "snippet": item.get("body") or item.get("snippet") or "",
-                                "published": item.get("date"),
-                                "source": item.get("source") or "",
-                                "language": "en",
-                            }
+                try:
+                    ddgs_context = DDGS(timeout=10)
+                except TypeError:
+                    ddgs_context = DDGS()
+                
+                with ddgs_context as ddgs:
+                    english_results = list(
+                        ddgs.news(
+                            keywords=keywords,
+                            region="us-en",
+                            safesearch="Off",
+                            max_results=max_results * 3,  # より多くの候補を取得
                         )
-        except Exception as e:
-            error_msg = f"英語ニュース取得でエラー: {str(e)}"
-            errors.append(error_msg)
-            logging.warning(error_msg)
+                    )
+                    for item in english_results:
+                        url = item.get("url", "")
+                        title = item.get("title", "")
+                        if url and url not in seen_urls and title:
+                            seen_urls.add(url)
+                            news_items.append(
+                                {
+                                    "title": title,
+                                    "url": url,
+                                    "snippet": item.get("body") or item.get("snippet") or "",
+                                    "published": item.get("date"),
+                                    "source": item.get("source") or "",
+                                    "language": "en",
+                                }
+                            )
+            except Exception as e:
+                error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
+                errors.append(error_msg)
+                logging.warning(error_msg)
+                continue
     
     # エラーが発生した場合はログに記録
     if errors and len(news_items) == 0:
@@ -840,11 +920,11 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
         for err in errors[:3]:  # 最初の3つのエラーのみ表示
             logging.error(err)
     
-    # 最新のニュースのみをフィルタリング（過去30日以内）
-    news_items = filter_recent_news(news_items, days_threshold=30)
+    # 最新のニュースのみをフィルタリング（過去1年以内）
+    news_items = filter_recent_news(news_items, days_threshold=365)
     
-    # 日付でソート（新しい順）
-    news_items = sort_news_by_date(news_items, reverse=True)
+    # 重要度と日付でソート（重要度が高い順、同じ重要度なら新しい順）
+    news_items = sort_news_by_importance_and_date(news_items, reverse=True)
     
     # max_resultsまでに制限
     return news_items[:max_results]
