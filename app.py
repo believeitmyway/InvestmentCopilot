@@ -172,6 +172,28 @@ def format_percent(value: Optional[float]) -> str:
     return f"{value:.2f}%"
 
 
+def safe_fast_info_get(fast_info, key: str):
+    """yfinance fast_info sometimes raises KeyError when a field is missing."""
+    if not fast_info:
+        return None
+    if isinstance(fast_info, dict):
+        return fast_info.get(key)
+    getter = getattr(fast_info, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)
+        except KeyError:
+            return None
+        except Exception:
+            pass
+    try:
+        return getattr(fast_info, key)
+    except (AttributeError, KeyError):
+        return None
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_ticker_snapshot(symbol: str) -> Dict:
     symbol = symbol.upper().strip()
@@ -185,11 +207,11 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
     except Exception as exc:  # pragma: no cover - network
         return {"error": f"データ取得に失敗しました: {exc}"}
 
-    price = fast_info.get("last_price") or info.get("currentPrice")
+    price = safe_fast_info_get(fast_info, "last_price") or info.get("currentPrice")
     if price is None and not hist.empty:
         price = float(hist["Close"].iloc[-1])
 
-    prev_close = fast_info.get("previous_close") or info.get("previousClose")
+    prev_close = safe_fast_info_get(fast_info, "previous_close") or info.get("previousClose")
     if prev_close is None and not hist.empty and len(hist) > 1:
         prev_close = float(hist["Close"].iloc[-2])
 
@@ -199,7 +221,7 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
         day_change_pct = (day_change / prev_close) * 100 if prev_close else None
 
     currency = (
-        fast_info.get("currency")
+        safe_fast_info_get(fast_info, "currency")
         or info.get("currency")
         or info.get("financialCurrency")
         or "USD"
@@ -234,7 +256,7 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
         "institutional_ownership_pct": inst_pct,
     }
 
-    ts = fast_info.get("last_price_time")
+    ts = safe_fast_info_get(fast_info, "last_price_time")
     if isinstance(ts, (int, float)):
         market_time = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     else:
