@@ -186,6 +186,57 @@ DEFAULT_GEMINI_MODEL = (
 )
 
 
+CHROME_PASSWORD_MANAGER_SCRIPT = """
+<script>
+(function attachChromePasswordHints() {
+    const doc = window.parent?.document || window.document;
+    const targets = [
+        { selector: 'input[aria-label*="OpenAI API Key"]', name: 'openai_api_key', autocomplete: 'current-password' },
+        { selector: 'input[aria-label*="Google AI Studio API Key"]', name: 'google_ai_studio_api_key', autocomplete: 'new-password' },
+        { selector: 'input[aria-label*="Gemini モデルID"]', name: 'gemini_model_id', autocomplete: 'username' },
+    ];
+    let attempts = 0;
+    const maxAttempts = 20;
+    const delay = 400;
+
+    function applyAttributes() {
+        let pending = false;
+        targets.forEach((cfg) => {
+            const input = doc.querySelector(cfg.selector);
+            if (!input) {
+                pending = true;
+                return;
+            }
+            input.setAttribute('name', cfg.name);
+            input.setAttribute('id', cfg.name);
+            input.setAttribute('autocomplete', cfg.autocomplete);
+            input.setAttribute('data-managed-by', 'chrome-password-manager');
+        });
+        if (pending && attempts < maxAttempts) {
+            attempts += 1;
+            setTimeout(applyAttributes, delay);
+        }
+    }
+
+    if (doc.readyState === 'complete') {
+        applyAttributes();
+    } else {
+        doc.addEventListener('readystatechange', () => {
+            if (doc.readyState === 'complete') {
+                applyAttributes();
+            }
+        });
+    }
+})();
+</script>
+"""
+
+
+def enable_chrome_password_manager_support():
+    """Inject autocomplete/name attributes so Chrome can store API keys & model IDs."""
+    st.markdown(CHROME_PASSWORD_MANAGER_SCRIPT, unsafe_allow_html=True)
+
+
 def build_ai_user_prompt(payload: Dict) -> str:
     return (
         "マーケットデータ:\n"
@@ -689,21 +740,22 @@ def main():
         "OpenAI API Key（任意・ローカルで保持）",
         type="password",
         value=openai_api_key_default,
-        help="APIキーはブラウザ内のみで使用され、サーバーには保存されません。",
+        help="APIキーはブラウザ内のみで使用され、Chrome のパスワードマネージャーに保存して自動入力できます。",
     )
     google_api_key_default = resolve_google_api_key_from_env()
     google_api_key = st.text_input(
         "Google AI Studio API Key（Gemini / 任意）",
         type="password",
         value=google_api_key_default,
-        help="環境変数 GOOGLE_API_KEY / GOOGLE_GENAI_API_KEY / GENAI_API_KEY / GEMINI_API_KEY のいずれかが設定されている場合、自動入力されます。",
+        help="環境変数から自動入力されるほか、Chrome のパスワードマネージャーにも保存できます。",
     )
     google_model_input = st.text_input(
         "Gemini モデルID",
         value=DEFAULT_GEMINI_MODEL,
-        help="APIキーで有効なモデルID（例: gemini-1.5-flash, gemini-1.5-pro）を指定します。",
+        help="APIキーで有効なモデルID（例: gemini-1.5-flash）を指定。Chrome パスワード管理でキーとセット保存も可能です。",
     )
     google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
+    enable_chrome_password_manager_support()
 
     if not ticker_input:
         st.info("分析したいティッカーを入力してください。")
