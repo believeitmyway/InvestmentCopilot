@@ -185,11 +185,51 @@ MOBILE_CSS = """
 st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
 
-AI_SYSTEM_PROMPT = (
-    "You are an equity strategist who writes concise Japanese summaries for busy executives. "
-    "Use the provided market snapshot to compare quantitative signals with analyst consensus. "
-    "Output JSON exactly with the requested schema."
-)
+def load_prompt_file(filename: str, default: str = "") -> str:
+    """プロンプトファイルを読み込む"""
+    prompt_dir = os.path.join(os.path.dirname(__file__), "prompts")
+    filepath = os.path.join(prompt_dir, filename)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        print(f"警告: プロンプトファイルが見つかりません: {filepath}。デフォルト値を使用します。")
+        return default
+    except Exception as e:
+        print(f"警告: プロンプトファイルの読み込みエラー ({filepath}): {e}。デフォルト値を使用します。")
+        return default
+
+
+def load_system_prompt() -> str:
+    """システムプロンプトを読み込む"""
+    default = (
+        "You are an equity strategist who writes concise Japanese summaries for busy executives. "
+        "Use the provided market snapshot to compare quantitative signals with analyst consensus. "
+        "Output JSON exactly with the requested schema."
+    )
+    return load_prompt_file("system_prompt.txt", default)
+
+
+def load_user_prompt_template() -> str:
+    """ユーザープロンプトテンプレートを読み込む"""
+    default = (
+        "マーケットデータ:\n"
+        "{market_data}\n\n"
+        "出力フォーマット(JSON):\n"
+        "{\n"
+        '"verdict_short":"",\n'
+        '"action":"Buy | Sell | Hold",\n'
+        '"score":0,\n'
+        '"bullet_points":["","", ""],\n'
+        '"scenario":{"bullish_case":"","bearish_case":"","competitive_edge":""},\n'
+        '"analysis_comment":""\n'
+        "}"
+    )
+    return load_prompt_file("user_prompt_template.txt", default)
+
+
+AI_SYSTEM_PROMPT = load_system_prompt()
+USER_PROMPT_TEMPLATE = load_user_prompt_template()
 
 GOOGLE_API_KEY_ENV_ORDER = [
     "GOOGLE_API_KEY",
@@ -311,19 +351,9 @@ def render_api_status_panel(status: Optional[Dict]):
 
 
 def build_ai_user_prompt(payload: Dict) -> str:
-    return (
-        "マーケットデータ:\n"
-        f"{json.dumps(payload, ensure_ascii=False)}\n\n"
-        "出力フォーマット(JSON):\n"
-        "{"
-        '"verdict_short":"",'
-        '"action":"Buy | Sell | Hold",'
-        '"score":0,'
-        '"bullet_points":["","", ""],'
-        '"scenario":{"bullish_case":"","bearish_case":"","competitive_edge":""},'
-        '"analysis_comment":""'
-        "}"
-    )
+    """ユーザープロンプトを構築する"""
+    market_data_json = json.dumps(payload, ensure_ascii=False)
+    return USER_PROMPT_TEMPLATE.replace("{market_data}", market_data_json)
 
 
 def resolve_google_api_key_from_env() -> str:
