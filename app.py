@@ -505,8 +505,7 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
         elif inst_pct < 0:
             inst_pct = None  # 負の値は無効
 
-    # 配当利回り: yfinanceは0-1の範囲の小数（例：0.05 = 5%）で返すため、100を掛けてパーセンテージに変換
-    # ただし、既にパーセンテージ形式（1.0以上）で返される場合もあるため、両方に対応
+    # 配当利回り: yfinanceは既にパーセンテージ形式で返す（例：0.95 = 0.95%）
     dividend_yield_raw = info.get("dividendYield")
     dividend_yield_pct = None
     if dividend_yield_raw is not None:
@@ -515,16 +514,12 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
             # 負の値は無効
             if dividend_yield_float < 0:
                 dividend_yield_pct = None
-            # 1.0以上の場合、既にパーセンテージ形式と判断（ただし100を超える場合は異常値の可能性）
-            elif dividend_yield_float >= 1.0:
-                # 100を超える場合は異常値の可能性があるため、警告を出すかNoneを返す
-                if dividend_yield_float > 100:
-                    dividend_yield_pct = None  # 異常値として無視
-                else:
-                    dividend_yield_pct = dividend_yield_float
-            # 0-1の範囲の場合、小数形式と判断して100を掛ける
+            # 100を超える場合は異常値の可能性があるため、無視
+            elif dividend_yield_float > 100:
+                dividend_yield_pct = None  # 異常値として無視
             else:
-                dividend_yield_pct = dividend_yield_float * 100
+                # そのまま使用（既にパーセンテージ形式）
+                dividend_yield_pct = dividend_yield_float
         except (ValueError, TypeError):
             dividend_yield_pct = None
 
