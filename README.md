@@ -23,6 +23,12 @@ streamlit run app.py
 
 ## 環境変数
 - `OPENAI_API_KEY` *(任意)*: 設定済みの場合、アプリの入力欄に自動で反映されます。
+- `GOOGLE_API_KEY` / `GOOGLE_GENAI_API_KEY` / `GENAI_API_KEY` / `GEMINI_API_KEY` *(任意)*: いずれかが設定されていれば Gemini 用の入力欄に自動で反映されます。名称の異なる既存プロジェクトからでもそのまま流用できます。
+
+## Gemini キーとモデル指定
+1. Google AI Studio で API キーを発行し、上記いずれかの環境変数に保存するか、アプリ起動後に「Google AI Studio API Key」欄へ貼り付けます。
+2. 「Gemini モデルID」欄で使用したいモデル名を指定してください。デフォルトは `gemini-1.5-flash` ですが、`gemini-1.5-pro` など任意のサポートモデルへ切り替え可能です。
+3. API キーが有効であれば Gemini レスポンスが最優先で使用され、失敗した場合のみ OpenAI → ヒューリスティックの順でフォールバックします。
 
 ## 注意事項
 - 本アプリは教育目的の情報提供ツールです。最終的な投資判断はご自身の責任で行ってください。

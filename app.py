@@ -171,6 +171,20 @@ AI_SYSTEM_PROMPT = (
     "Output JSON exactly with the requested schema."
 )
 
+GOOGLE_API_KEY_ENV_ORDER = [
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENAI_API_KEY",
+    "GENAI_API_KEY",
+    "GEMINI_API_KEY",
+]
+
+DEFAULT_GEMINI_MODEL = (
+    os.getenv("GOOGLE_GENAI_MODEL")
+    or os.getenv("GEMINI_MODEL")
+    or os.getenv("GEMINI_MODEL_NAME")
+    or "gemini-1.5-flash"
+)
+
 
 def build_ai_user_prompt(payload: Dict) -> str:
     return (
@@ -186,6 +200,14 @@ def build_ai_user_prompt(payload: Dict) -> str:
         '"analysis_comment":""'
         "}"
     )
+
+
+def resolve_google_api_key_from_env() -> str:
+    for env_name in GOOGLE_API_KEY_ENV_ORDER:
+        value = os.getenv(env_name)
+        if value:
+            return value
+    return ""
 
 
 def normalize_ticker_input(raw_symbol: str) -> Dict[str, str]:
@@ -468,13 +490,18 @@ def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[D
         return None
 
 
-def request_gemini_analysis(api_key: Optional[str], payload: Dict) -> Optional[Dict]:
+def request_gemini_analysis(
+    api_key: Optional[str],
+    payload: Dict,
+    model_name: Optional[str],
+) -> Optional[Dict]:
     if not api_key or genai is None:
         return None
+    model_id = (model_name or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name=model_id,
             system_instruction=AI_SYSTEM_PROMPT,
         )
         response = model.generate_content(
@@ -505,11 +532,12 @@ def generate_ai_analysis(
     google_api_key: Optional[str],
     snapshot: Dict,
     news_items: List[Dict],
+    google_model_name: Optional[str],
 ) -> Dict:
     payload = build_analysis_payload(snapshot, news_items)
     fallback = heuristic_analysis(snapshot)
 
-    google_response = request_gemini_analysis(google_api_key, payload)
+    google_response = request_gemini_analysis(google_api_key, payload, google_model_name)
     if google_response:
         return google_response
 
@@ -663,13 +691,19 @@ def main():
         value=openai_api_key_default,
         help="APIキーはブラウザ内のみで使用され、サーバーには保存されません。",
     )
-    google_api_key_default = os.getenv("GOOGLE_API_KEY", "")
+    google_api_key_default = resolve_google_api_key_from_env()
     google_api_key = st.text_input(
         "Google AI Studio API Key（Gemini / 任意）",
         type="password",
         value=google_api_key_default,
-        help="Gemini（Google AI Studio）のキーもサポートしています。",
+        help="環境変数 GOOGLE_API_KEY / GOOGLE_GENAI_API_KEY / GENAI_API_KEY / GEMINI_API_KEY のいずれかが設定されている場合、自動入力されます。",
     )
+    google_model_input = st.text_input(
+        "Gemini モデルID",
+        value=DEFAULT_GEMINI_MODEL,
+        help="APIキーで有効なモデルID（例: gemini-1.5-flash, gemini-1.5-pro）を指定します。",
+    )
+    google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
 
     if not ticker_input:
         st.info("分析したいティッカーを入力してください。")
@@ -696,7 +730,13 @@ def main():
 
     news_items = fetch_news(snapshot["company_name"])
     with st.spinner("AIが分析中..."):
-        analysis = generate_ai_analysis(openai_api_key, google_api_key, snapshot, news_items)
+        analysis = generate_ai_analysis(
+            openai_api_key,
+            google_api_key,
+            snapshot,
+            news_items,
+            google_model_name,
+        )
 
     render_header(snapshot, analysis)
     st.markdown("### ✅ 結論エリア")
