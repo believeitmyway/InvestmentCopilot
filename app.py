@@ -736,18 +736,245 @@ def sort_news_by_date(news_items: List[Dict], reverse: bool = True) -> List[Dict
     return sorted(news_items, key=get_sort_key, reverse=reverse)
 
 
+def get_japanese_company_name(symbol: str) -> Optional[str]:
+    """ティッカーシンボルから日本語の社名を取得する"""
+    if not symbol:
+        return None
+    
+    symbol_clean = symbol.replace(".T", "").strip()
+    if not symbol_clean.isdigit():
+        return None
+    
+    # 主要な日本株のティッカーシンボルと日本語社名のマッピング
+    japanese_names = {
+        "6501": "日立製作所",
+        "6502": "東芝",
+        "6503": "三菱電機",
+        "6758": "ソニーグループ",
+        "7203": "トヨタ自動車",
+        "6752": "パナソニック",
+        "9984": "ソフトバンクグループ",
+        "9434": "ソフトバンク",
+        "9983": "ファーストリテイリング",
+        "8031": "三井物産",
+        "8058": "三菱商事",
+        "8001": "伊藤忠商事",
+        "8002": "丸紅",
+        "8306": "三菱UFJフィナンシャル・グループ",
+        "8316": "三井住友フィナンシャルグループ",
+        "8411": "みずほフィナンシャルグループ",
+        "4063": "信越化学工業",
+        "4061": "デンカ",
+        "3401": "帝人",
+        "3402": "東レ",
+        "3405": "クラレ",
+        "3407": "旭化成",
+        "4911": "資生堂",
+        "4912": "ライオン",
+        "4452": "花王",
+        "4453": "資生堂",
+        "6098": "リクルートホールディングス",
+        "6099": "エルピーダメモリ",
+        "6178": "日本郵政",
+        "6179": "日本郵政",
+        "8801": "三井不動産",
+        "8802": "三菱地所",
+        "2914": "日本たばこ産業",
+        "2501": "サッポロホールディングス",
+        "2502": "アサヒグループホールディングス",
+        "2503": "キリンホールディングス",
+        "2531": "宝ホールディングス",
+        "2801": "キッコーマン",
+        "2802": "味の素",
+        "2871": "ニチレイ",
+        "3101": "東洋紡",
+        "3103": "ユニ・チャーム",
+        "3105": "日清紡ホールディングス",
+        "3401": "帝人",
+        "3402": "東レ",
+        "3405": "クラレ",
+        "3407": "旭化成",
+        "4005": "住友化学",
+        "4004": "昭和電工",
+        "4003": "コスモエネルギーホールディングス",
+        "4061": "デンカ",
+        "4063": "信越化学工業",
+        "4183": "三井化学",
+        "4188": "三菱ケミカルホールディングス",
+        "4208": "宇部興産",
+        "4272": "日本化薬",
+        "4452": "花王",
+        "4453": "資生堂",
+        "4502": "武田薬品工業",
+        "4503": "アステラス製薬",
+        "4506": "大日本住友製薬",
+        "4507": "塩野義製薬",
+        "4519": "中外製薬",
+        "4523": "エーザイ",
+        "4527": "ロート製薬",
+        "4528": "小野薬品工業",
+        "4543": "テルモ",
+        "4568": "第一三共",
+        "4578": "大塚ホールディングス",
+        "4612": "日本ペイントホールディングス",
+        "4661": "オリエンタルランド",
+        "4684": "オムロン",
+        "4689": "ヤフー",
+        "4704": "トレンドマイクロ",
+        "4751": "サイバーエージェント",
+        "4755": "楽天グループ",
+        "4901": "富士フイルムホールディングス",
+        "4911": "資生堂",
+        "5019": "出光興産",
+        "5020": "ENEOSホールディングス",
+        "5101": "横浜ゴム",
+        "5108": "ブリヂストン",
+        "5201": "AGC",
+        "5214": "日本電気硝子",
+        "5232": "住友大阪セメント",
+        "5233": "太平洋セメント",
+        "5301": "東海カーボン",
+        "5332": "TOTO",
+        "5333": "日本ガイシ",
+        "5401": "日本製鉄",
+        "5406": "神戸製鋼所",
+        "5411": "JFEホールディングス",
+        "5541": "大平洋金属",
+        "5631": "日本製鋼所",
+        "5703": "日本軽金属ホールディングス",
+        "5711": "三菱マテリアル",
+        "5713": "住友金属鉱山",
+        "5714": "DOWAホールディングス",
+        "5801": "古河電気工業",
+        "5802": "住友電気工業",
+        "5803": "フジクラ",
+        "6098": "リクルートホールディングス",
+        "6178": "日本郵政",
+        "6301": "コマツ",
+        "6302": "住友重機械工業",
+        "6305": "日立建機",
+        "6326": "クボタ",
+        "6361": "荏原製作所",
+        "6367": "ダイキン工業",
+        "6471": "日本精工",
+        "6472": "NTN",
+        "6473": "ジェイテクト",
+        "6501": "日立製作所",
+        "6502": "東芝",
+        "6503": "三菱電機",
+        "6504": "富士電機",
+        "6506": "安川電機",
+        "6594": "日本電産",
+        "6701": "日本電気",
+        "6702": "富士通",
+        "6723": "ルネサスエレクトロニクス",
+        "6724": "セイコーエプソン",
+        "6752": "パナソニック",
+        "6758": "ソニーグループ",
+        "6770": "アルプスアルパイン",
+        "6841": "横河電機",
+        "6857": "アドバンテスト",
+        "6861": "キーエンス",
+        "6902": "デンソー",
+        "6954": "ファナック",
+        "6971": "京セラ",
+        "6976": "太陽誘電",
+        "6981": "村田製作所",
+        "7011": "三菱重工業",
+        "7012": "川崎重工業",
+        "7013": "IHI",
+        "7201": "日産自動車",
+        "7202": "いすゞ自動車",
+        "7203": "トヨタ自動車",
+        "7205": "日野自動車",
+        "7261": "マツダ",
+        "7267": "ホンダ",
+        "7269": "スズキ",
+        "7270": "SUBARU",
+        "7272": "ヤマハ発動機",
+        "7731": "ニコン",
+        "7732": "トプコン",
+        "7733": "オリンパス",
+        "7741": "HOYA",
+        "7751": "キヤノン",
+        "7832": "バンダイナムコホールディングス",
+        "7911": "凸版印刷",
+        "7912": "大日本印刷",
+        "8001": "伊藤忠商事",
+        "8002": "丸紅",
+        "8015": "豊田通商",
+        "8031": "三井物産",
+        "8058": "三菱商事",
+        "8060": "野村ホールディングス",
+        "8306": "三菱UFJフィナンシャル・グループ",
+        "8316": "三井住友フィナンシャルグループ",
+        "8354": "ふくおかフィナンシャルグループ",
+        "8355": "静岡銀行",
+        "8411": "みずほフィナンシャルグループ",
+        "8601": "大和証券グループ本社",
+        "8604": "野村ホールディングス",
+        "8628": "松井証券",
+        "8630": "SOMPOホールディングス",
+        "8725": "MS&ADインシュアランスグループホールディングス",
+        "8750": "第一生命ホールディングス",
+        "8766": "東京海上ホールディングス",
+        "8801": "三井不動産",
+        "8802": "三菱地所",
+        "8830": "住友不動産",
+        "9001": "東武鉄道",
+        "9005": "東急",
+        "9007": "小田急電鉄",
+        "9008": "京王電鉄",
+        "9009": "京成電鉄",
+        "9020": "東日本旅客鉄道",
+        "9021": "西日本旅客鉄道",
+        "9022": "東海旅客鉄道",
+        "9104": "商船三井",
+        "9107": "川崎汽船",
+        "9202": "ANAホールディングス",
+        "9301": "三菱倉庫",
+        "9432": "日本電信電話",
+        "9433": "KDDI",
+        "9434": "ソフトバンク",
+        "9501": "東京電力ホールディングス",
+        "9502": "中部電力",
+        "9503": "関西電力",
+        "9531": "東京ガス",
+        "9532": "大阪ガス",
+        "9602": "東宝",
+        "9681": "東京ドーム",
+        "9684": "スクウェア・エニックス・ホールディングス",
+        "9697": "カプコン",
+        "9706": "日本空港ビルデング",
+        "9719": "SCSK",
+        "9735": "セコム",
+        "9766": "コナミホールディングス",
+        "9983": "ファーストリテイリング",
+        "9984": "ソフトバンクグループ",
+    }
+    
+    return japanese_names.get(symbol_clean)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -> List[Dict]:
+def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15) -> List[Dict]:
     """日本語の最新ニュースを確実に取得する関数"""
     if not query:
         return []
     
     # 日本株かどうかを判定（.Tで終わる、または4桁の数字）
     is_japanese_stock = False
+    symbol_clean = None
     if symbol:
         symbol_upper = symbol.upper().strip()
         if symbol_upper.endswith(".T") or (symbol_upper.isdigit() and 4 <= len(symbol_upper) <= 5):
             is_japanese_stock = True
+            symbol_clean = symbol.replace(".T", "").strip()
+    
+    # 日本語の社名を取得
+    japanese_company_name = None
+    if is_japanese_stock and symbol_clean:
+        japanese_company_name = get_japanese_company_name(symbol)
     
     news_items = []
     seen_urls = set()  # 重複チェック用
@@ -755,8 +982,42 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     
     # 日本株の場合は日本語のニュースを優先的に取得
     if is_japanese_stock:
-        # 重要度の高いニュースを優先的に取得するための検索キーワードパターン
-        search_keywords = [
+        # 検索キーワードのリストを構築
+        search_keywords = []
+        
+        # 日本語の社名がある場合は、それを優先的に使用
+        if japanese_company_name:
+            search_keywords.extend([
+                f"{japanese_company_name} 決算 業績",
+                f"{japanese_company_name} 決算発表",
+                f"{japanese_company_name} 業績発表",
+                f"{japanese_company_name} IR 投資家向け説明会",
+                f"{japanese_company_name} 株主総会",
+                f"{japanese_company_name} M&A 買収 合併",
+                f"{japanese_company_name} 大型投資 戦略発表",
+                f"{japanese_company_name} 株価 ニュース",
+                f"{japanese_company_name} 株 最新",
+                f"{japanese_company_name} 企業 ニュース",
+                f"{japanese_company_name} 最新ニュース",
+            ])
+        
+        # ティッカーシンボルでの検索も追加
+        if symbol_clean and symbol_clean.isdigit():
+            search_keywords.extend([
+                f"{symbol_clean} 株価",
+                f"{symbol_clean} ニュース",
+                f"{symbol_clean} 決算",
+                f"{symbol_clean} 業績",
+            ])
+            # 日本語の社名がある場合は、ティッカーシンボルと組み合わせた検索も追加
+            if japanese_company_name:
+                search_keywords.extend([
+                    f"{symbol_clean} {japanese_company_name}",
+                    f"{japanese_company_name} {symbol_clean}",
+                ])
+        
+        # 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
+        search_keywords.extend([
             f"{query} 決算 業績",
             f"{query} 決算発表",
             f"{query} 業績発表",
@@ -768,17 +1029,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
             f"{query} 株 最新",
             f"{query} 企業 ニュース",
             f"{query} 最新ニュース",
-        ]
-        
-        # シンボルがある場合は追加の検索パターン
-        if symbol:
-            symbol_clean = symbol.replace(".T", "").strip()
-            if symbol_clean.isdigit():
-                search_keywords.extend([
-                    f"{symbol_clean} 株価",
-                    f"{symbol_clean} ニュース",
-                    f"{query} {symbol_clean}",
-                ])
+        ])
         
         # 複数の検索を試行
         for keywords in search_keywords:
@@ -796,7 +1047,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
                             keywords=keywords,
                             region="jp-ja",
                             safesearch="Off",
-                            max_results=max_results * 5,  # より多くの候補を取得（重要ニュースを優先）
+                            max_results=max(max_results * 8, 50),  # より多くの候補を取得（重要ニュースを優先）
                         )
                     )
                     for item in japanese_results:
@@ -821,43 +1072,55 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
                 logging.warning(error_msg)
                 continue
         
-        # 日本語ニュースが取得できなかった場合、より広範囲な検索を試行
-        if len(news_items) == 0:
-            try:
+        # 日本語ニュースが少ない場合、より広範囲な検索を試行
+        if len(news_items) < max_results:
+            fallback_queries = []
+            if japanese_company_name:
+                fallback_queries.append(japanese_company_name)
+            if symbol_clean and symbol_clean.isdigit():
+                fallback_queries.append(symbol_clean)
+            fallback_queries.append(query)
+            
+            for fallback_query in fallback_queries:
                 try:
-                    ddgs_context = DDGS(timeout=10)
-                except TypeError:
-                    ddgs_context = DDGS()
-                
-                with ddgs_context as ddgs:
-                    # よりシンプルな検索クエリで再試行
-                    fallback_results = list(
-                        ddgs.news(
-                            keywords=query,
-                            region="jp-ja",
-                            safesearch="Off",
-                            max_results=max_results * 2,
-                        )
-                    )
-                    for item in fallback_results:
-                        url = item.get("url", "")
-                        title = item.get("title", "")
-                        if url and url not in seen_urls and title:
-                            seen_urls.add(url)
-                            news_items.append(
-                                {
-                                    "title": title,
-                                    "url": url,
-                                    "snippet": item.get("body") or item.get("snippet") or "",
-                                    "published": item.get("date"),
-                                    "source": item.get("source") or "",
-                                    "language": "ja",
-                                }
+                    try:
+                        ddgs_context = DDGS(timeout=10)
+                    except TypeError:
+                        ddgs_context = DDGS()
+                    
+                    with ddgs_context as ddgs:
+                        # よりシンプルな検索クエリで再試行
+                        fallback_results = list(
+                            ddgs.news(
+                                keywords=fallback_query,
+                                region="jp-ja",
+                                safesearch="Off",
+                                max_results=max(max_results * 4, 30),
                             )
-            except Exception as e:
-                error_msg = f"フォールバック検索でエラー: {str(e)}"
-                errors.append(error_msg)
-                logging.warning(error_msg)
+                        )
+                        for item in fallback_results:
+                            url = item.get("url", "")
+                            title = item.get("title", "")
+                            if url and url not in seen_urls and title:
+                                seen_urls.add(url)
+                                news_items.append(
+                                    {
+                                        "title": title,
+                                        "url": url,
+                                        "snippet": item.get("body") or item.get("snippet") or "",
+                                        "published": item.get("date"),
+                                        "source": item.get("source") or "",
+                                        "language": "ja",
+                                    }
+                                )
+                        # 十分なニュースが取得できた場合はループを抜ける
+                        if len(news_items) >= max_results * 2:
+                            break
+                except Exception as e:
+                    error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {str(e)}"
+                    errors.append(error_msg)
+                    logging.warning(error_msg)
+                    continue
     
     # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
     if not is_japanese_stock or len(news_items) < max_results:
@@ -885,7 +1148,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
                             keywords=keywords,
                             region="us-en",
                             safesearch="Off",
-                            max_results=max_results * 3,  # より多くの候補を取得
+                            max_results=max(max_results * 5, 30),  # より多くの候補を取得
                         )
                     )
                     for item in english_results:
@@ -921,7 +1184,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     # 重要度と日付でソート（重要度が高い順、同じ重要度なら新しい順）
     news_items = sort_news_by_importance_and_date(news_items, reverse=True)
     
-    # max_resultsまでに制限
+    # max_resultsまでに制限（ただし、重要度の高いニュースは優先的に含める）
     return news_items[:max_results]
 
 
