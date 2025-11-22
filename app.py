@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -159,11 +160,42 @@ MOBILE_CSS = """
 st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
 
+def normalize_ticker_input(raw_symbol: str) -> Dict[str, str]:
+    """Convert user input like '6501' to a resolvable yfinance symbol such as '6501.T'."""
+    raw_symbol = (raw_symbol or "").strip()
+    normalized = raw_symbol.upper().replace("Ｔ", "T").strip()
+    normalized = re.sub(r"^(?:TYO|JPX|JP|TSE):", "", normalized)
+    normalized = normalized.replace(" ", "")
+
+    conversion_note = ""
+    query_symbol = normalized
+    display_symbol = normalized or raw_symbol
+
+    if normalized.isdigit() and 4 <= len(normalized) <= 5:
+        query_symbol = f"{normalized}.T"
+        display_symbol = raw_symbol or query_symbol
+        conversion_note = f"国内証券コード {raw_symbol or normalized} を {query_symbol} として取得しました。"
+
+    return {
+        "input_symbol": raw_symbol,
+        "query_symbol": query_symbol,
+        "display_symbol": display_symbol or query_symbol,
+        "conversion_note": conversion_note,
+    }
+
+
 def format_currency(value: Optional[float], currency: str = "USD") -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "—"
-    symbol = "$" if currency.upper() == "USD" else ""
-    return f"{symbol}{value:,.2f}"
+    currency = (currency or "USD").upper()
+    symbol_map = {
+        "USD": "$",
+        "JPY": "¥",
+        "EUR": "€",
+    }
+    symbol = symbol_map.get(currency, "")
+    decimals = 0 if currency == "JPY" else 2
+    return f"{symbol}{value:,.{decimals}f}"
 
 
 def format_percent(value: Optional[float]) -> str:
@@ -310,8 +342,9 @@ def fetch_news(query: str, max_results: int = 5) -> List[Dict]:
 
 
 def build_analysis_payload(snapshot: Dict, news_items: List[Dict]) -> Dict:
+    symbol_for_payload = snapshot.get("resolved_symbol") or snapshot.get("symbol")
     return {
-        "symbol": snapshot["symbol"],
+        "symbol": symbol_for_payload,
         "company_name": snapshot["company_name"],
         "currency": snapshot["currency"],
         "price": snapshot["price"],
@@ -431,6 +464,7 @@ def render_header(snapshot: Dict, analysis: Dict):
     day_pct = snapshot.get("day_change_pct")
     day_abs = snapshot.get("day_change")
     currency = snapshot.get("currency", "USD")
+    symbol_label = snapshot.get("display_symbol") or snapshot.get("symbol")
 
     day_class = "positive" if (day_pct or 0) >= 0 else "negative"
     day_text = (
@@ -451,7 +485,7 @@ def render_header(snapshot: Dict, analysis: Dict):
 
     header_html = f"""
     <div class="header-card">
-        <div class="header-symbol">{snapshot['symbol']} · {snapshot['company_name']}</div>
+        <div class="header-symbol">{symbol_label} · {snapshot['company_name']}</div>
         <div class="header-price">{format_currency(price, currency)}</div>
         <div class="price-change {day_class}">{day_text}</div>
         <div class="score-grid">
@@ -560,7 +594,7 @@ def main():
     st.title("📱 Mobile AI Investment Dashboard")
     st.caption("忙しいビジネスマン向けの即断支援ツール（学習目的のみ）")
 
-    ticker = st.text_input("ティッカーシンボル", value="AAPL").upper()
+    ticker_input = st.text_input("ティッカーシンボル", value="AAPL")
     api_key_default = os.getenv("OPENAI_API_KEY", "")
     api_key = st.text_input(
         "OpenAI API Key（任意・ローカルで保持）",
@@ -569,16 +603,28 @@ def main():
         help="APIキーはブラウザ内のみで使用され、サーバーには保存されません。",
     )
 
-    if not ticker:
+    if not ticker_input:
         st.info("分析したいティッカーを入力してください。")
         return
 
+    normalized = normalize_ticker_input(ticker_input)
+    query_symbol = normalized.get("query_symbol")
+    if not query_symbol:
+        st.error("ティッカーの形式を確認してください。")
+        return
+
     with st.spinner("マーケットデータを取得中..."):
-        snapshot = fetch_ticker_snapshot(ticker)
+        snapshot = fetch_ticker_snapshot(query_symbol)
 
     if snapshot.get("error"):
         st.error(snapshot["error"])
         return
+
+    snapshot["display_symbol"] = normalized.get("display_symbol") or snapshot.get("symbol")
+    snapshot["input_symbol"] = normalized.get("input_symbol")
+    snapshot["resolved_symbol"] = snapshot.get("symbol")
+    if normalized.get("conversion_note"):
+        st.caption(normalized["conversion_note"])
 
     news_items = fetch_news(snapshot["company_name"])
     with st.spinner("AIが分析中..."):
