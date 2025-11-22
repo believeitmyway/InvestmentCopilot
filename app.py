@@ -10,6 +10,8 @@ import streamlit as st
 import yfinance as yf
 from duckduckgo_search import DDGS
 from openai import OpenAI
+import plotly.graph_objects as go
+import plotly.express as px
 
 try:
     import requests
@@ -597,6 +599,129 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
         "analyst": analyst_snapshot,
         "key_metrics": key_metrics,
     }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_history(symbol: str, period: str = "1mo") -> Optional[Dict]:
+    """株価の時系列データを取得する"""
+    symbol = symbol.upper().strip()
+    if not symbol:
+        return {"error": "ティッカーが指定されていません。"}
+    
+    try:
+        ticker = yf.Ticker(symbol)
+        # period: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+        # interval: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+        hist = ticker.history(period=period)
+        
+        if hist.empty:
+            return {"error": "データが取得できませんでした。"}
+        
+        # データを辞書形式に変換
+        data = {
+            "dates": hist.index.tolist(),
+            "open": hist["Open"].tolist(),
+            "high": hist["High"].tolist(),
+            "low": hist["Low"].tolist(),
+            "close": hist["Close"].tolist(),
+            "volume": hist["Volume"].tolist(),
+        }
+        
+        return {"error": None, "data": data, "symbol": symbol}
+    except Exception as exc:
+        return {"error": f"データ取得に失敗しました: {exc}"}
+
+
+def create_stock_chart(history_data: Dict, symbol: str, currency: str = "USD") -> go.Figure:
+    """株価の時系列グラフを作成する（Plotly）"""
+    from plotly.subplots import make_subplots
+    
+    if history_data.get("error") or not history_data.get("data"):
+        fig = go.Figure()
+        fig.add_annotation(
+            text="データが取得できませんでした",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
+        return fig
+    
+    data = history_data["data"]
+    dates = data["dates"]
+    closes = data["close"]
+    volumes = data["volume"]
+    
+    # サブプロットを作成（価格チャートと出来高チャート）
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        row_heights=[0.7, 0.3],
+        subplot_titles=("株価", "出来高"),
+    )
+    
+    # ローソク足
+    fig.add_trace(
+        go.Candlestick(
+            x=dates,
+            open=data["open"],
+            high=data["high"],
+            low=data["low"],
+            close=data["close"],
+            name="価格",
+            increasing_line_color="#10b981",
+            decreasing_line_color="#f87171",
+        ),
+        row=1, col=1
+    )
+    
+    # 出来高
+    colors = ["#10b981" if closes[i] >= data["open"][i] else "#f87171" 
+              for i in range(len(dates))]
+    fig.add_trace(
+        go.Bar(
+            x=dates,
+            y=volumes,
+            name="出来高",
+            marker_color=colors,
+            opacity=0.6,
+        ),
+        row=2, col=1
+    )
+    
+    # レイアウト設定
+    currency_symbol = "¥" if currency == "JPY" else "$"
+    fig.update_layout(
+        title=f"{symbol} 株価チャート",
+        xaxis_title="日付",
+        yaxis_title=f"価格 ({currency_symbol})",
+        yaxis2_title="出来高",
+        height=600,
+        template="plotly_dark",
+        hovermode="x unified",
+        showlegend=False,
+        xaxis_rangeslider_visible=False,
+    )
+    
+    # グラフの背景色をダークテーマに合わせる
+    fig.update_layout(
+        plot_bgcolor="#0f1116",
+        paper_bgcolor="#0f1116",
+        font_color="#f3f4f6",
+    )
+    
+    return fig
+
+
+def get_yahoo_finance_url(symbol: str) -> str:
+    """Yahoo FinanceのURLを生成"""
+    symbol_clean = symbol.replace(".T", "")
+    if symbol_clean.isdigit():
+        # 日本株の場合
+        return f"https://finance.yahoo.co.jp/quote/{symbol_clean}.T"
+    else:
+        # 海外株の場合
+        return f"https://finance.yahoo.com/quote/{symbol}"
 
 
 def parse_news_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -1602,6 +1727,56 @@ def render_tabs(analysis: Dict, snapshot: Dict, news_items: List[Dict]):
 
     metrics = snapshot["key_metrics"]
     with tabs[2]:
+        # 株価グラフセクション
+        st.markdown("**📈 株価チャート**")
+        symbol = snapshot.get("symbol") or snapshot.get("resolved_symbol")
+        currency = snapshot.get("currency", "USD")
+        
+        # 期間選択
+        period_options = {
+            "1日": "1d",
+            "5日": "5d",
+            "1週間": "1wk",
+            "1ヶ月": "1mo",
+            "3ヶ月": "3mo",
+            "6ヶ月": "6mo",
+            "1年": "1y",
+            "2年": "2y",
+            "5年": "5y",
+        }
+        selected_period_label = st.selectbox(
+            "期間を選択",
+            options=list(period_options.keys()),
+            index=3,  # デフォルトは1ヶ月
+            key="stock_chart_period"
+        )
+        selected_period = period_options[selected_period_label]
+        
+        if symbol:
+            with st.spinner("株価データを取得中..."):
+                history_data = fetch_stock_history(symbol, period=selected_period)
+            
+            if history_data.get("error"):
+                st.error(f"株価データの取得に失敗しました: {history_data['error']}")
+            else:
+                # グラフを表示
+                fig = create_stock_chart(history_data, symbol, currency)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # データ提供元へのリンク
+                yahoo_url = get_yahoo_finance_url(symbol)
+                st.markdown(
+                    f'<div style="text-align: center; margin-top: 10px;">'
+                    f'<a href="{yahoo_url}" target="_blank" style="color: #3b82f6; text-decoration: none;">'
+                    f'📊 Yahoo Financeで詳細を見る</a></div>',
+                    unsafe_allow_html=True
+                )
+                st.caption("グラフをクリックして拡大表示できます。データ提供元: Yahoo Finance")
+        else:
+            st.warning("シンボル情報が取得できませんでした。")
+        
+        st.divider()
+        
         st.markdown("**主要指標**")
         metric_lines = []
         pairs = [
