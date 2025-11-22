@@ -620,7 +620,7 @@ def request_openai_analysis(api_key: Optional[str], payload: Dict) -> Optional[D
         client = OpenAI(api_key=api_key_clean)
         response = client.chat.completions.create(
             model=OPENAI_DEFAULT_MODEL,
-            temperature=0.2,
+            temperature=0.0,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": AI_SYSTEM_PROMPT},
