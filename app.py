@@ -213,9 +213,10 @@ CHROME_PASSWORD_MANAGER_SCRIPT = """
 (function attachChromePasswordHints() {
     const doc = window.parent?.document || window.document;
     const targets = [
-        { selector: 'input[aria-label*="OpenAI API Key"]', name: 'openai_api_key', autocomplete: 'current-password' },
-        { selector: 'input[aria-label*="Google AI Studio API Key"]', name: 'google_ai_studio_api_key', autocomplete: 'new-password' },
         { selector: 'input[aria-label*="Gemini モデルID"]', name: 'gemini_model_id', autocomplete: 'username' },
+        { selector: 'input[aria-label*="Google AI Studio API Key"]', name: 'google_ai_studio_api_key', autocomplete: 'current-password' },
+        { selector: 'input[aria-label*="OpenAI API Key"]', name: 'openai_api_key', autocomplete: 'off' },
+        { selector: 'input[aria-label*="ティッカーシンボル"]', name: 'ticker_symbol', autocomplete: 'off' },
     ];
     let attempts = 0;
     const maxAttempts = 20;
@@ -851,7 +852,20 @@ def main():
     st.title("📱 Mobile AI Investment Dashboard")
     st.caption("忙しいビジネスマン向けの即断支援ツール（学習目的のみ）")
 
-    ticker_input = st.text_input("ティッカーシンボル", value="AAPL")
+    google_model_input = st.text_input(
+        "Gemini モデルID",
+        value=DEFAULT_GEMINI_MODEL,
+        help="APIキーで有効なモデルID（例: gemini-1.5-flash）を指定。Chrome パスワード管理でIDとして保存されます。",
+    )
+    google_api_key_default = resolve_google_api_key_from_env()
+    google_api_key = st.text_input(
+        "Google AI Studio API Key（Gemini / 任意）",
+        type="password",
+        value=google_api_key_default,
+        help="環境変数から自動入力されるほか、Chrome のパスワードマネージャーにパスワードとして保存できます。",
+    )
+    google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
+    
     openai_api_key_default = os.getenv("OPENAI_API_KEY", "")
     openai_api_key = st.text_input(
         "OpenAI API Key（任意・ローカルで保持）",
@@ -859,19 +873,8 @@ def main():
         value=openai_api_key_default,
         help="APIキーはブラウザ内のみで使用され、Chrome のパスワードマネージャーに保存して自動入力できます。",
     )
-    google_api_key_default = resolve_google_api_key_from_env()
-    google_api_key = st.text_input(
-        "Google AI Studio API Key（Gemini / 任意）",
-        type="password",
-        value=google_api_key_default,
-        help="環境変数から自動入力されるほか、Chrome のパスワードマネージャーにも保存できます。",
-    )
-    google_model_input = st.text_input(
-        "Gemini モデルID",
-        value=DEFAULT_GEMINI_MODEL,
-        help="APIキーで有効なモデルID（例: gemini-1.5-flash）を指定。Chrome パスワード管理でキーとセット保存も可能です。",
-    )
-    google_model_name = (google_model_input or "").strip() or DEFAULT_GEMINI_MODEL
+    
+    ticker_input = st.text_input("ティッカーシンボル", value="AAPL")
 
     if "effective_openai_api_key" not in st.session_state:
         st.session_state["effective_openai_api_key"] = openai_api_key_default.strip()
