@@ -1,12 +1,31 @@
-マーケットデータ:
-{market_data}
+以下の情報を統合し、多忙なビジネスマン向けの投資判断レポートを作成してください。
 
-出力フォーマット(JSON):
+# Input Data
+1.  **Market & Financial Data (定量情報):**
+    {market_data}
+
+2.  **Recent News & Search Results (定性情報・市場環境):**
+    {news_context}
+
+# Analysis Instructions for Specific Fields
+* **bullet_points:** 抽象的な表現を避け、具体的な「製品名」「競合企業名」「数値」を含めて3点挙げること。
+* **scenario.competitive_edge:** 技術力、ブランド、サプライチェーンなど、他社が真似できない強み（Moat）は何か？また、企業の現在の戦略が市場ニーズと合致しているか？
+* **analysis_comment:** 市場コンセンサス（プロの評価）と、実際のニュース/ファンダメンタルズのギャップを指摘し、独自の洞察を加えること。
+
+# Output Format (JSON)
 {{
-"verdict_short":"",
-"action":"Buy | Sell | Hold",
-"score":0,
-"bullet_points":["","", ""],
-"scenario":{{"bullish_case":"","bearish_case":"","competitive_edge":""}},
-"analysis_comment":""
+  "verdict_short": "30文字以内の結論（例: 〇〇需要増により強気継続、押し目買い推奨）",
+  "action": "Buy | Sell | Hold",
+  "score": 0-100,
+  "bullet_points": [
+    "魅力/強み (具体的な固有名詞を入れる)",
+    "懸念/リスク (具体的な固有名詞を入れる)",
+    "次のカタリスト (決算、イベント等)"
+  ],
+  "scenario": {{
+    "bullish_case": "業界動向を踏まえ、なぜ株価が上がるのかのロジック",
+    "bearish_case": "競合の動きや市場環境悪化によるリスクシナリオ",
+    "competitive_edge": "競合他社に対する明確な優位性と、企業のコア戦略への評価"
+  }},
+  "analysis_comment": "総評。市場の期待値に対する評価と、投資家が今取るべき行動の提案。"
 }}

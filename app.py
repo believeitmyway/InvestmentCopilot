@@ -353,7 +353,24 @@ def render_api_status_panel(status: Optional[Dict]):
 def build_ai_user_prompt(payload: Dict) -> str:
     """ユーザープロンプトを構築する"""
     market_data_json = json.dumps(payload, ensure_ascii=False)
-    return USER_PROMPT_TEMPLATE.replace("{market_data}", market_data_json)
+    
+    # ニュース検索結果をテキストにまとめる
+    news_items = payload.get("news", [])
+    news_text = ""
+    if news_items:
+        for n in news_items:
+            title = n.get("title", "")
+            snippet = n.get("snippet") or n.get("body", "")
+            # タイトルと本文（snippet）を結合
+            news_text += f"- Title: {title}\n  Snippet: {snippet}\n"
+    else:
+        news_text = "（最新ニュース情報は取得できませんでした）"
+    
+    # プロンプトの {market_data} と {news_context} に流し込む
+    return USER_PROMPT_TEMPLATE.format(
+        market_data=market_data_json,
+        news_context=news_text
+    )
 
 
 def resolve_google_api_key_from_env() -> str:
