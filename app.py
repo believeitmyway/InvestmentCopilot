@@ -2,7 +2,7 @@ import json
 import math
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import streamlit as st
@@ -587,6 +587,97 @@ def fetch_ticker_snapshot(symbol: str) -> Dict:
     }
 
 
+def parse_news_date(date_str: Optional[str]) -> Optional[datetime]:
+    """ニュースの日付文字列をパースしてdatetimeオブジェクトに変換"""
+    if not date_str:
+        return None
+    
+    # 様々な日付形式に対応
+    date_formats = [
+        "%Y-%m-%dT%H:%M:%S%z",  # ISO形式（タイムゾーン付き）
+        "%Y-%m-%dT%H:%M:%S",     # ISO形式（タイムゾーンなし）
+        "%Y-%m-%d %H:%M:%S",     # 標準形式
+        "%Y-%m-%d",              # 日付のみ
+        "%d %b %Y",              # "01 Jan 2024"
+        "%d %B %Y",              # "01 January 2024"
+        "%Y年%m月%d日",           # 日本語形式
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    
+    # 相対的な日付表現（例："2時間前"、"3日前"）の処理
+    if isinstance(date_str, str):
+        date_str_lower = date_str.lower()
+        now = datetime.now(timezone.utc)
+        
+        # "時間前"、"日前"などの相対表現を処理
+        import re
+        hours_match = re.search(r'(\d+)\s*時間前', date_str_lower)
+        if hours_match:
+            hours = int(hours_match.group(1))
+            return now - timedelta(hours=hours)
+        
+        days_match = re.search(r'(\d+)\s*日前', date_str_lower)
+        if days_match:
+            days = int(days_match.group(1))
+            return now - timedelta(days=days)
+    
+    return None
+
+
+def filter_recent_news(news_items: List[Dict], days_threshold: int = 30) -> List[Dict]:
+    """指定日数以内のニュースのみをフィルタリング"""
+    if not news_items:
+        return []
+    
+    threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+    filtered = []
+    
+    for item in news_items:
+        date_str = item.get("published")
+        if not date_str:
+            # 日付情報がない場合は含める（最新の可能性がある）
+            filtered.append(item)
+            continue
+        
+        parsed_date = parse_news_date(date_str)
+        if parsed_date:
+            # タイムゾーン情報がない場合はUTCと仮定
+            if parsed_date.tzinfo is None:
+                parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+            
+            if parsed_date >= threshold_date:
+                filtered.append(item)
+        else:
+            # パースできない場合は含める（最新の可能性がある）
+            filtered.append(item)
+    
+    return filtered
+
+
+def sort_news_by_date(news_items: List[Dict], reverse: bool = True) -> List[Dict]:
+    """ニュースを日付でソート（デフォルトは新しい順）"""
+    def get_sort_key(item: Dict) -> datetime:
+        date_str = item.get("published")
+        if not date_str:
+            # 日付がない場合は最も古い日付として扱う
+            return datetime(1970, 1, 1, tzinfo=timezone.utc)
+        
+        parsed_date = parse_news_date(date_str)
+        if parsed_date:
+            if parsed_date.tzinfo is None:
+                parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+            return parsed_date
+        
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    
+    return sorted(news_items, key=get_sort_key, reverse=reverse)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -> List[Dict]:
     if not query:
@@ -602,47 +693,59 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
     news_items = []
     seen_urls = set()  # 重複チェック用
     
-    # 英語のニュースを取得
-    try:
-        with DDGS() as ddgs:
-            english_results = list(
-                ddgs.news(
-                    keywords=f"{query} stock",
-                    region="us-en",
-                    safesearch="Off",
-                    max_results=max_results,
-                )
-            )
-            for item in english_results:
-                url = item.get("url", "")
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    news_items.append(
-                        {
-                            "title": item.get("title"),
-                            "url": url,
-                            "snippet": item.get("body") or item.get("snippet"),
-                            "published": item.get("date"),
-                            "source": item.get("source"),
-                            "language": "en",
-                        }
-                    )
-    except Exception:  # pragma: no cover - network
-        pass
-    
-    # 日本株の場合は日本語のニュースも取得
+    # 日本株の場合は日本語のニュースを優先的に取得
     if is_japanese_stock:
         try:
             with DDGS() as ddgs:
-                japanese_results = list(
+                # 複数のキーワードパターンで検索してより多くの結果を取得
+                search_keywords = [
+                    f"{query} 株価 ニュース",
+                    f"{query} 株 最新",
+                    f"{query} 企業 ニュース",
+                ]
+                
+                for keywords in search_keywords:
+                    try:
+                        japanese_results = list(
+                            ddgs.news(
+                                keywords=keywords,
+                                region="jp-ja",
+                                safesearch="Off",
+                                max_results=max_results * 2,  # より多くの候補を取得
+                            )
+                        )
+                        for item in japanese_results:
+                            url = item.get("url", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                news_items.append(
+                                    {
+                                        "title": item.get("title"),
+                                        "url": url,
+                                        "snippet": item.get("body") or item.get("snippet"),
+                                        "published": item.get("date"),
+                                        "source": item.get("source"),
+                                        "language": "ja",
+                                    }
+                                )
+                    except Exception:
+                        continue
+        except Exception:  # pragma: no cover - network
+            pass
+    
+    # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
+    if not is_japanese_stock or len(news_items) < max_results:
+        try:
+            with DDGS() as ddgs:
+                english_results = list(
                     ddgs.news(
-                        keywords=f"{query} 株",
-                        region="jp-ja",
+                        keywords=f"{query} stock",
+                        region="us-en",
                         safesearch="Off",
-                        max_results=max_results,
+                        max_results=max_results * 2,  # より多くの候補を取得
                     )
                 )
-                for item in japanese_results:
+                for item in english_results:
                     url = item.get("url", "")
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -653,11 +756,17 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 5) -
                                 "snippet": item.get("body") or item.get("snippet"),
                                 "published": item.get("date"),
                                 "source": item.get("source"),
-                                "language": "ja",
+                                "language": "en",
                             }
                         )
         except Exception:  # pragma: no cover - network
             pass
+    
+    # 最新のニュースのみをフィルタリング（過去30日以内）
+    news_items = filter_recent_news(news_items, days_threshold=30)
+    
+    # 日付でソート（新しい順）
+    news_items = sort_news_by_date(news_items, reverse=True)
     
     # max_resultsまでに制限
     return news_items[:max_results]
