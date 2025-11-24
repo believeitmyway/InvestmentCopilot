@@ -9,7 +9,11 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 import yfinance as yf
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    # 後方互換性のため、古いパッケージ名も試行
+    from duckduckgo_search import DDGS
 from openai import OpenAI
 import plotly.graph_objects as go
 import plotly.express as px
@@ -1617,16 +1621,20 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
             # 複数の検索を試行
             initial_multiplier = multipliers.get("initial_japanese", 8)
             initial_min_candidates = min_candidates.get("initial_japanese", 50)
-            for keywords in search_keywords:
+            for idx, keywords in enumerate(search_keywords):
                 # 既に十分な件数が得られている場合はスキップ
                 if len(news_items) >= min_required_results * 2:
                     break
+                
+                # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                if idx > 0:
+                    time.sleep(1)
                     
                 try:
-                    # timeoutパラメータはduckduckgo-searchのバージョンによってはサポートされていない可能性がある
+                    # timeoutパラメータはddgsのバージョンによってはサポートされていない可能性がある
                     try:
                         ddgs_context = DDGS(timeout=timeout)
-                    except TypeError:
+                    except (TypeError, ValueError):
                         # timeoutパラメータがサポートされていない場合はデフォルトを使用
                         ddgs_context = DDGS()
                     
@@ -1655,10 +1663,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                     }
                                 )
                 except Exception as e:
-                    error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
-                    errors.append(error_msg)
-                    # エラーをログに記録（Streamlitのログに出力）
-                    logging.warning(error_msg)
+                    error_str = str(e)
+                    # レート制限エラーの場合は特別な処理
+                    if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
+                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                        errors.append(error_msg)
+                        logging.warning(error_msg)
+                        # レート制限の場合は少し長めに待機
+                        if retry_attempt < max_retries - 1:
+                            time.sleep(retry_delay_seconds * 2)
+                    else:
+                        error_msg = f"検索キーワード '{keywords}' でエラー: {error_str}"
+                        errors.append(error_msg)
+                        logging.warning(error_msg)
                     continue
             
             # 既に十分な件数が得られている場合はフォールバック検索をスキップ
@@ -1675,15 +1692,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                 
                 fallback_multiplier = multipliers.get("fallback_japanese", 4)
                 fallback_min_candidates = min_candidates.get("fallback_japanese", 30)
-                for fallback_query in fallback_queries:
+                for idx, fallback_query in enumerate(fallback_queries):
                     # 既に十分な件数が得られている場合はスキップ
                     if len(news_items) >= min_required_results * 2:
                         break
+                    
+                    # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                    if idx > 0:
+                        time.sleep(1)
                         
                     try:
                         try:
                             ddgs_context = DDGS(timeout=timeout)
-                        except TypeError:
+                        except (TypeError, ValueError):
                             ddgs_context = DDGS()
                         
                         with ddgs_context as ddgs:
@@ -1715,9 +1736,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                             if len(news_items) >= max_results * fallback_sufficient_threshold_multiplier:
                                 break
                     except Exception as e:
-                        error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {str(e)}"
-                        errors.append(error_msg)
-                        logging.warning(error_msg)
+                        error_str = str(e)
+                        # レート制限エラーの場合は特別な処理
+                        if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
+                            error_msg = f"フォールバック検索（'{fallback_query}'）でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                            errors.append(error_msg)
+                            logging.warning(error_msg)
+                            # レート制限の場合は少し長めに待機
+                            if retry_attempt < max_retries - 1:
+                                time.sleep(retry_delay_seconds * 2)
+                        else:
+                            error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {error_str}"
+                            errors.append(error_msg)
+                            logging.warning(error_msg)
                         continue
         
         # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
@@ -1729,15 +1760,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
             
             english_multiplier = multipliers.get("english", 5)
             english_min_candidates = min_candidates.get("english", 30)
-            for keywords in english_keywords:
+            for idx, keywords in enumerate(english_keywords):
                 # 既に十分な件数が得られている場合はスキップ
                 if len(news_items) >= min_required_results * 2:
                     break
+                
+                # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                if idx > 0:
+                    time.sleep(1)
                     
                 try:
                     try:
                         ddgs_context = DDGS(timeout=timeout)
-                    except TypeError:
+                    except (TypeError, ValueError):
                         ddgs_context = DDGS()
                     
                     with ddgs_context as ddgs:
@@ -1765,9 +1800,19 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                     }
                                 )
                 except Exception as e:
-                    error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
-                    errors.append(error_msg)
-                    logging.warning(error_msg)
+                    error_str = str(e)
+                    # レート制限エラーの場合は特別な処理
+                    if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
+                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                        errors.append(error_msg)
+                        logging.warning(error_msg)
+                        # レート制限の場合は少し長めに待機
+                        if retry_attempt < max_retries - 1:
+                            time.sleep(retry_delay_seconds * 2)
+                    else:
+                        error_msg = f"検索キーワード '{keywords}' でエラー: {error_str}"
+                        errors.append(error_msg)
+                        logging.warning(error_msg)
                     continue
         
         # 最低件数に達した場合はループを抜ける
