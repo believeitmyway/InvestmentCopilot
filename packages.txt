@@ -1,0 +1,2 @@
+# Streamlit Cloud用のパッケージリスト
+# このファイルはStreamlit Cloudでのデプロイ時に使用されます
