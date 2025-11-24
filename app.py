@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -246,6 +247,9 @@ def load_news_search_config() -> Dict:
     default_config = {
         "search": {
             "max_results": 15,
+            "min_required_results": 5,
+            "max_retries": 3,
+            "retry_delay_seconds": 2,
             "multipliers": {
                 "initial_japanese": 8,
                 "fallback_japanese": 4,
@@ -256,8 +260,8 @@ def load_news_search_config() -> Dict:
                 "fallback_japanese": 30,
                 "english": 30
             },
-            "timeout": 10,
-            "article_fetch_timeout": 8
+            "timeout": 30,
+            "article_fetch_timeout": 15
         },
         "keywords": {
             "japanese_search_templates": [
@@ -1530,7 +1534,7 @@ def fetch_article_content(url: str, timeout: int = 10) -> Optional[str]:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, yfinance_info: Optional[Dict] = None) -> List[Dict]:
-    """日本語の最新ニュースを確実に取得する関数"""
+    """日本語の最新ニュースを確実に取得する関数（最低件数が得られるまで再試行）"""
     if not query:
         return []
     
@@ -1542,10 +1546,13 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     # 検索パラメータ
     default_max_results = config.get("max_results", 15)
     max_results = max_results if max_results != 15 else default_max_results
+    min_required_results = config.get("min_required_results", 5)
+    max_retries = config.get("max_retries", 3)
+    retry_delay_seconds = config.get("retry_delay_seconds", 2)
     multipliers = config.get("multipliers", {})
     min_candidates = config.get("min_candidates", {})
-    timeout = config.get("timeout", 10)
-    article_fetch_timeout = config.get("article_fetch_timeout", 8)
+    timeout = config.get("timeout", 30)
+    article_fetch_timeout = config.get("article_fetch_timeout", 15)
     
     # キーワードテンプレート
     japanese_search_templates = keywords_config.get("japanese_search_templates", [])
@@ -1577,101 +1584,62 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     seen_urls = set()  # 重複チェック用
     errors = []  # エラーログ用
     
-    # 日本株の場合は日本語のニュースを優先的に取得
-    if is_japanese_stock:
-        # 検索キーワードのリストを構築
-        search_keywords = []
+    # 最低件数が得られるまで再試行する
+    for retry_attempt in range(max_retries):
+        if retry_attempt > 0:
+            # 再試行前に少し待機（APIレート制限を避けるため）
+            time.sleep(retry_delay_seconds)
+            logging.info(f"ニュース取得の再試行 {retry_attempt}/{max_retries - 1}（現在の件数: {len(news_items)}）")
         
-        # 日本語の社名がある場合は、それを優先的に使用
-        if japanese_company_name:
-            for template in japanese_search_templates:
-                search_keywords.append(template.format(company_name=japanese_company_name))
-        
-        # ティッカーシンボルでの検索も追加
-        if symbol_clean and symbol_clean.isdigit():
-            for template in japanese_symbol_templates:
-                search_keywords.append(template.format(symbol=symbol_clean))
-            # 日本語の社名がある場合は、ティッカーシンボルと組み合わせた検索も追加
-            if japanese_company_name:
-                for template in japanese_combined_templates:
-                    search_keywords.append(template.format(symbol=symbol_clean, company_name=japanese_company_name))
-        
-        # 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
-        for template in japanese_search_templates:
-            search_keywords.append(template.format(company_name=query))
-        
-        # 複数の検索を試行
-        initial_multiplier = multipliers.get("initial_japanese", 8)
-        initial_min_candidates = min_candidates.get("initial_japanese", 50)
-        for keywords in search_keywords:
-            try:
-                # timeoutパラメータはduckduckgo-searchのバージョンによってはサポートされていない可能性がある
-                try:
-                    ddgs_context = DDGS(timeout=timeout)
-                except TypeError:
-                    # timeoutパラメータがサポートされていない場合はデフォルトを使用
-                    ddgs_context = DDGS()
-                
-                with ddgs_context as ddgs:
-                    japanese_results = list(
-                        ddgs.news(
-                            keywords=keywords,
-                            region="jp-ja",
-                            safesearch="Off",
-                            max_results=max(max_results * initial_multiplier, initial_min_candidates),
-                        )
-                    )
-                    for item in japanese_results:
-                        url = item.get("url", "")
-                        title = item.get("title", "")
-                        if url and url not in seen_urls and title:
-                            seen_urls.add(url)
-                            news_items.append(
-                                {
-                                    "title": title,
-                                    "url": url,
-                                    "snippet": item.get("body") or item.get("snippet") or "",
-                                    "published": item.get("date"),
-                                    "source": item.get("source") or "",
-                                    "language": "ja",
-                                }
-                            )
-            except Exception as e:
-                error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
-                errors.append(error_msg)
-                # エラーをログに記録（Streamlitのログに出力）
-                logging.warning(error_msg)
-                continue
-        
-        # 日本語ニュースが少ない場合、より広範囲な検索を試行
-        if len(news_items) < max_results:
-            fallback_queries = []
-            if japanese_company_name:
-                fallback_queries.append(japanese_company_name)
-            if symbol_clean and symbol_clean.isdigit():
-                fallback_queries.append(symbol_clean)
-            fallback_queries.append(query)
+        # 日本株の場合は日本語のニュースを優先的に取得
+        if is_japanese_stock:
+            # 検索キーワードのリストを構築
+            search_keywords = []
             
-            fallback_multiplier = multipliers.get("fallback_japanese", 4)
-            fallback_min_candidates = min_candidates.get("fallback_japanese", 30)
-            for fallback_query in fallback_queries:
+            # 日本語の社名がある場合は、それを優先的に使用
+            if japanese_company_name:
+                for template in japanese_search_templates:
+                    search_keywords.append(template.format(company_name=japanese_company_name))
+            
+            # ティッカーシンボルでの検索も追加
+            if symbol_clean and symbol_clean.isdigit():
+                for template in japanese_symbol_templates:
+                    search_keywords.append(template.format(symbol=symbol_clean))
+                # 日本語の社名がある場合は、ティッカーシンボルと組み合わせた検索も追加
+                if japanese_company_name:
+                    for template in japanese_combined_templates:
+                        search_keywords.append(template.format(symbol=symbol_clean, company_name=japanese_company_name))
+            
+            # 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
+            for template in japanese_search_templates:
+                search_keywords.append(template.format(company_name=query))
+            
+            # 複数の検索を試行
+            initial_multiplier = multipliers.get("initial_japanese", 8)
+            initial_min_candidates = min_candidates.get("initial_japanese", 50)
+            for keywords in search_keywords:
+                # 既に十分な件数が得られている場合はスキップ
+                if len(news_items) >= min_required_results * 2:
+                    break
+                    
                 try:
+                    # timeoutパラメータはduckduckgo-searchのバージョンによってはサポートされていない可能性がある
                     try:
                         ddgs_context = DDGS(timeout=timeout)
                     except TypeError:
+                        # timeoutパラメータがサポートされていない場合はデフォルトを使用
                         ddgs_context = DDGS()
                     
                     with ddgs_context as ddgs:
-                        # よりシンプルな検索クエリで再試行
-                        fallback_results = list(
+                        japanese_results = list(
                             ddgs.news(
-                                keywords=fallback_query,
+                                keywords=keywords,
                                 region="jp-ja",
                                 safesearch="Off",
-                                max_results=max(max_results * fallback_multiplier, fallback_min_candidates),
+                                max_results=max(max_results * initial_multiplier, initial_min_candidates),
                             )
                         )
-                        for item in fallback_results:
+                        for item in japanese_results:
                             url = item.get("url", "")
                             title = item.get("title", "")
                             if url and url not in seen_urls and title:
@@ -1686,60 +1654,131 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                         "language": "ja",
                                     }
                                 )
-                        # 十分なニュースが取得できた場合はループを抜ける
-                        if len(news_items) >= max_results * fallback_sufficient_threshold_multiplier:
-                            break
                 except Exception as e:
-                    error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {str(e)}"
+                    error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
+                    errors.append(error_msg)
+                    # エラーをログに記録（Streamlitのログに出力）
+                    logging.warning(error_msg)
+                    continue
+            
+            # 既に十分な件数が得られている場合はフォールバック検索をスキップ
+            if len(news_items) >= min_required_results * 2:
+                pass  # 次の処理に進む
+            # 日本語ニュースが少ない場合、より広範囲な検索を試行
+            elif len(news_items) < min_required_results:
+                fallback_queries = []
+                if japanese_company_name:
+                    fallback_queries.append(japanese_company_name)
+                if symbol_clean and symbol_clean.isdigit():
+                    fallback_queries.append(symbol_clean)
+                fallback_queries.append(query)
+                
+                fallback_multiplier = multipliers.get("fallback_japanese", 4)
+                fallback_min_candidates = min_candidates.get("fallback_japanese", 30)
+                for fallback_query in fallback_queries:
+                    # 既に十分な件数が得られている場合はスキップ
+                    if len(news_items) >= min_required_results * 2:
+                        break
+                        
+                    try:
+                        try:
+                            ddgs_context = DDGS(timeout=timeout)
+                        except TypeError:
+                            ddgs_context = DDGS()
+                        
+                        with ddgs_context as ddgs:
+                            # よりシンプルな検索クエリで再試行
+                            fallback_results = list(
+                                ddgs.news(
+                                    keywords=fallback_query,
+                                    region="jp-ja",
+                                    safesearch="Off",
+                                    max_results=max(max_results * fallback_multiplier, fallback_min_candidates),
+                                )
+                            )
+                            for item in fallback_results:
+                                url = item.get("url", "")
+                                title = item.get("title", "")
+                                if url and url not in seen_urls and title:
+                                    seen_urls.add(url)
+                                    news_items.append(
+                                        {
+                                            "title": title,
+                                            "url": url,
+                                            "snippet": item.get("body") or item.get("snippet") or "",
+                                            "published": item.get("date"),
+                                            "source": item.get("source") or "",
+                                            "language": "ja",
+                                        }
+                                    )
+                            # 十分なニュースが取得できた場合はループを抜ける
+                            if len(news_items) >= max_results * fallback_sufficient_threshold_multiplier:
+                                break
+                    except Exception as e:
+                        error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {str(e)}"
+                        errors.append(error_msg)
+                        logging.warning(error_msg)
+                        continue
+        
+        # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
+        if not is_japanese_stock or len(news_items) < min_required_results:
+            # 重要度の高いニュースを優先的に取得するための検索キーワード
+            english_keywords = []
+            for template in english_search_templates:
+                english_keywords.append(template.format(query=query))
+            
+            english_multiplier = multipliers.get("english", 5)
+            english_min_candidates = min_candidates.get("english", 30)
+            for keywords in english_keywords:
+                # 既に十分な件数が得られている場合はスキップ
+                if len(news_items) >= min_required_results * 2:
+                    break
+                    
+                try:
+                    try:
+                        ddgs_context = DDGS(timeout=timeout)
+                    except TypeError:
+                        ddgs_context = DDGS()
+                    
+                    with ddgs_context as ddgs:
+                        english_results = list(
+                            ddgs.news(
+                                keywords=keywords,
+                                region="us-en",
+                                safesearch="Off",
+                                max_results=max(max_results * english_multiplier, english_min_candidates),
+                            )
+                        )
+                        for item in english_results:
+                            url = item.get("url", "")
+                            title = item.get("title", "")
+                            if url and url not in seen_urls and title:
+                                seen_urls.add(url)
+                                news_items.append(
+                                    {
+                                        "title": title,
+                                        "url": url,
+                                        "snippet": item.get("body") or item.get("snippet") or "",
+                                        "published": item.get("date"),
+                                        "source": item.get("source") or "",
+                                        "language": "en",
+                                    }
+                                )
+                except Exception as e:
+                    error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
                     errors.append(error_msg)
                     logging.warning(error_msg)
                     continue
-    
-    # 日本株でない場合、または日本語ニュースが少ない場合は英語のニュースも取得
-    if not is_japanese_stock or len(news_items) < max_results:
-        # 重要度の高いニュースを優先的に取得するための検索キーワード
-        english_keywords = []
-        for template in english_search_templates:
-            english_keywords.append(template.format(query=query))
         
-        english_multiplier = multipliers.get("english", 5)
-        english_min_candidates = min_candidates.get("english", 30)
-        for keywords in english_keywords:
-            try:
-                try:
-                    ddgs_context = DDGS(timeout=timeout)
-                except TypeError:
-                    ddgs_context = DDGS()
-                
-                with ddgs_context as ddgs:
-                    english_results = list(
-                        ddgs.news(
-                            keywords=keywords,
-                            region="us-en",
-                            safesearch="Off",
-                            max_results=max(max_results * english_multiplier, english_min_candidates),
-                        )
-                    )
-                    for item in english_results:
-                        url = item.get("url", "")
-                        title = item.get("title", "")
-                        if url and url not in seen_urls and title:
-                            seen_urls.add(url)
-                            news_items.append(
-                                {
-                                    "title": title,
-                                    "url": url,
-                                    "snippet": item.get("body") or item.get("snippet") or "",
-                                    "published": item.get("date"),
-                                    "source": item.get("source") or "",
-                                    "language": "en",
-                                }
-                            )
-            except Exception as e:
-                error_msg = f"検索キーワード '{keywords}' でエラー: {str(e)}"
-                errors.append(error_msg)
-                logging.warning(error_msg)
-                continue
+        # 最低件数に達した場合はループを抜ける
+        if len(news_items) >= min_required_results:
+            break
+    
+    # 再試行後の最終的な件数をログに記録
+    if len(news_items) < min_required_results:
+        logging.warning(f"最低件数（{min_required_results}件）に達しませんでした。取得件数: {len(news_items)}件")
+    else:
+        logging.info(f"ニュース取得成功: {len(news_items)}件（目標: {min_required_results}件以上）")
     
     # エラーが発生した場合はログに記録
     if errors and len(news_items) == 0:
