@@ -1,6 +1,9 @@
 {
   "search": {
     "max_results": 15,
+    "min_required_results": 5,
+    "max_retries": 3,
+    "retry_delay_seconds": 2,
     "multipliers": {
       "initial_japanese": 8,
       "fallback_japanese": 4,
@@ -11,8 +14,8 @@
       "fallback_japanese": 30,
       "english": 30
     },
-    "timeout": 10,
-    "article_fetch_timeout": 8
+    "timeout": 30,
+    "article_fetch_timeout": 15
   },
   "keywords": {
     "japanese_search_templates": [
