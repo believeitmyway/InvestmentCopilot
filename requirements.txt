@@ -1,4 +1,4 @@
-streamlit>=1.40.0
+streamlit>=1.39.0
 yfinance>=0.2.44
 duckduckgo-search>=6.2.5
 openai>=1.54.0

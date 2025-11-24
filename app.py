@@ -30,8 +30,6 @@ st.set_page_config(
     page_title="Mobile-First AI Investment Dashboard",
     layout="centered",
     page_icon="📈",
-    initial_sidebar_state="collapsed",
-    menu_items=None,
 )
 
 
