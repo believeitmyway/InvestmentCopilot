@@ -1641,7 +1641,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                     with ddgs_context as ddgs:
                         japanese_results = list(
                             ddgs.news(
-                                keywords=keywords,
+                                query=keywords,
                                 region="jp-ja",
                                 safesearch="Off",
                                 max_results=max(max_results * initial_multiplier, initial_min_candidates),
@@ -1711,7 +1711,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                             # よりシンプルな検索クエリで再試行
                             fallback_results = list(
                                 ddgs.news(
-                                    keywords=fallback_query,
+                                    query=fallback_query,
                                     region="jp-ja",
                                     safesearch="Off",
                                     max_results=max(max_results * fallback_multiplier, fallback_min_candidates),
@@ -1778,7 +1778,7 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                     with ddgs_context as ddgs:
                         english_results = list(
                             ddgs.news(
-                                keywords=keywords,
+                                query=keywords,
                                 region="us-en",
                                 safesearch="Off",
                                 max_results=max(max_results * english_multiplier, english_min_candidates),
