@@ -1587,48 +1587,71 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
     news_items = []
     seen_urls = set()  # 重複チェック用
     errors = []  # エラーログ用
+    rate_limit_errors = 0  # 連続レート制限エラーカウント
+    max_rate_limit_errors = 3  # 連続レート制限エラーの最大回数
     
     # 最低件数が得られるまで再試行する
     for retry_attempt in range(max_retries):
         if retry_attempt > 0:
-            # 再試行前に少し待機（APIレート制限を避けるため）
-            time.sleep(retry_delay_seconds)
-            logging.info(f"ニュース取得の再試行 {retry_attempt}/{max_retries - 1}（現在の件数: {len(news_items)}）")
+            # 再試行前に指数バックオフで待機（APIレート制限を避けるため）
+            backoff_delay = retry_delay_seconds * (2 ** retry_attempt)
+            time.sleep(backoff_delay)
+            logging.info(f"ニュース取得の再試行 {retry_attempt}/{max_retries - 1}（現在の件数: {len(news_items)}、待機時間: {backoff_delay}秒）")
+        
+        # 連続レート制限エラーが多すぎる場合は早期終了
+        if rate_limit_errors >= max_rate_limit_errors:
+            logging.warning(f"連続レート制限エラーが{max_rate_limit_errors}回発生しました。検索を中断します。")
+            break
         
         # 日本株の場合は日本語のニュースを優先的に取得
         if is_japanese_stock:
             # 検索キーワードのリストを構築
             search_keywords = []
             
-            # 日本語の社名がある場合は、それを優先的に使用
+            # 検索キーワードを優先度順に構築（重要度の高い検索を最初に実行）
+            # 1. 日本語の社名がある場合は、それを優先的に使用（最も重要）
             if japanese_company_name:
-                for template in japanese_search_templates:
-                    search_keywords.append(template.format(company_name=japanese_company_name))
+                # 重要度の高いテンプレートを最初に追加
+                priority_templates = [
+                    "{company_name} 決算 業績",
+                    "{company_name} 決算発表",
+                    "{company_name} 業績発表",
+                    "{company_name} IR 投資家向け説明会",
+                ]
+                other_templates = [t for t in japanese_search_templates if t not in priority_templates]
+                for template in priority_templates + other_templates:
+                    if template in japanese_search_templates:
+                        search_keywords.append(template.format(company_name=japanese_company_name))
             
-            # ティッカーシンボルでの検索も追加
+            # 2. ティッカーシンボルと日本語社名の組み合わせ（重要度が高い）
+            if symbol_clean and symbol_clean.isdigit() and japanese_company_name:
+                for template in japanese_combined_templates:
+                    search_keywords.append(template.format(symbol=symbol_clean, company_name=japanese_company_name))
+            
+            # 3. ティッカーシンボルでの検索
             if symbol_clean and symbol_clean.isdigit():
                 for template in japanese_symbol_templates:
                     search_keywords.append(template.format(symbol=symbol_clean))
-                # 日本語の社名がある場合は、ティッカーシンボルと組み合わせた検索も追加
-                if japanese_company_name:
-                    for template in japanese_combined_templates:
-                        search_keywords.append(template.format(symbol=symbol_clean, company_name=japanese_company_name))
             
-            # 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
-            for template in japanese_search_templates:
-                search_keywords.append(template.format(company_name=query))
+            # 4. 英語の社名も検索に含める（日本語ニュースが見つからない場合のフォールバック）
+            # ただし、既に十分な検索キーワードがある場合はスキップ
+            if len(search_keywords) < 5:
+                for template in japanese_search_templates[:3]:  # 最初の3つだけ使用
+                    search_keywords.append(template.format(company_name=query))
             
             # 複数の検索を試行
             initial_multiplier = multipliers.get("initial_japanese", 8)
             initial_min_candidates = min_candidates.get("initial_japanese", 50)
             for idx, keywords in enumerate(search_keywords):
-                # 既に十分な件数が得られている場合はスキップ
+                # 既に十分な件数が得られている場合はスキップ（目標の2倍以上）
                 if len(news_items) >= min_required_results * 2:
+                    logging.info(f"十分なニュースが取得できたため、残りの検索をスキップします（現在: {len(news_items)}件、目標: {min_required_results * 2}件以上）。")
                     break
                 
-                # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                # レート制限を避けるため、検索の間に待機（最初の検索以外、レート制限エラー後は長めに）
                 if idx > 0:
-                    time.sleep(1)
+                    wait_time = 3 if rate_limit_errors > 0 else 2
+                    time.sleep(wait_time)
                     
                 try:
                     # timeoutパラメータはddgsのバージョンによってはサポートされていない可能性がある
@@ -1647,6 +1670,11 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                 max_results=max(max_results * initial_multiplier, initial_min_candidates),
                             )
                         )
+                        # 成功した場合はレート制限エラーカウントをリセット
+                        rate_limit_errors = 0
+                        # 検索結果が空の場合はログに記録
+                        if not japanese_results:
+                            logging.debug(f"検索キーワード '{keywords}' で結果が0件でした。")
                         for item in japanese_results:
                             url = item.get("url", "")
                             title = item.get("title", "")
@@ -1662,17 +1690,29 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                         "language": "ja",
                                     }
                                 )
+                        # 十分なニュースが取得できた場合はループを抜ける
+                        if len(news_items) >= min_required_results * 2:
+                            logging.info(f"十分なニュースが取得できたため、検索を終了します（現在: {len(news_items)}件）。")
+                            break
                 except Exception as e:
                     error_str = str(e)
                     # レート制限エラーの場合は特別な処理
                     if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
-                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                        rate_limit_errors += 1
+                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました（{rate_limit_errors}/{max_rate_limit_errors}回目）。"
                         errors.append(error_msg)
                         logging.warning(error_msg)
-                        # レート制限の場合は少し長めに待機
-                        if retry_attempt < max_retries - 1:
-                            time.sleep(retry_delay_seconds * 2)
+                        # レート制限の場合は指数バックオフで待機
+                        if retry_attempt < max_retries - 1 and rate_limit_errors < max_rate_limit_errors:
+                            backoff_delay = retry_delay_seconds * (2 ** rate_limit_errors) * 2
+                            logging.info(f"レート制限のため{backoff_delay}秒待機します...")
+                            time.sleep(backoff_delay)
+                        else:
+                            # 連続レート制限エラーが多すぎる場合はこの検索をスキップ
+                            logging.warning(f"レート制限エラーが多すぎるため、残りの検索をスキップします。")
+                            break
                     else:
+                        # レート制限以外のエラーはカウントしない
                         error_msg = f"検索キーワード '{keywords}' でエラー: {error_str}"
                         errors.append(error_msg)
                         logging.warning(error_msg)
@@ -1697,9 +1737,10 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                     if len(news_items) >= min_required_results * 2:
                         break
                     
-                    # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                    # レート制限を避けるため、検索の間に待機（最初の検索以外、レート制限エラー後は長めに）
                     if idx > 0:
-                        time.sleep(1)
+                        wait_time = 3 if rate_limit_errors > 0 else 2
+                        time.sleep(wait_time)
                         
                     try:
                         try:
@@ -1717,6 +1758,11 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                     max_results=max(max_results * fallback_multiplier, fallback_min_candidates),
                                 )
                             )
+                            # 成功した場合はレート制限エラーカウントをリセット
+                            rate_limit_errors = 0
+                            # 検索結果が空の場合はログに記録
+                            if not fallback_results:
+                                logging.debug(f"フォールバック検索（'{fallback_query}'）で結果が0件でした。")
                             for item in fallback_results:
                                 url = item.get("url", "")
                                 title = item.get("title", "")
@@ -1734,18 +1780,27 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                     )
                             # 十分なニュースが取得できた場合はループを抜ける
                             if len(news_items) >= max_results * fallback_sufficient_threshold_multiplier:
+                                logging.info(f"十分なニュースが取得できたため、フォールバック検索を終了します（現在: {len(news_items)}件）。")
                                 break
                     except Exception as e:
                         error_str = str(e)
                         # レート制限エラーの場合は特別な処理
                         if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
-                            error_msg = f"フォールバック検索（'{fallback_query}'）でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                            rate_limit_errors += 1
+                            error_msg = f"フォールバック検索（'{fallback_query}'）でレート制限エラーが発生しました（{rate_limit_errors}/{max_rate_limit_errors}回目）。"
                             errors.append(error_msg)
                             logging.warning(error_msg)
-                            # レート制限の場合は少し長めに待機
-                            if retry_attempt < max_retries - 1:
-                                time.sleep(retry_delay_seconds * 2)
+                            # レート制限の場合は指数バックオフで待機
+                            if retry_attempt < max_retries - 1 and rate_limit_errors < max_rate_limit_errors:
+                                backoff_delay = retry_delay_seconds * (2 ** rate_limit_errors) * 2
+                                logging.info(f"レート制限のため{backoff_delay}秒待機します...")
+                                time.sleep(backoff_delay)
+                            else:
+                                # 連続レート制限エラーが多すぎる場合はこの検索をスキップ
+                                logging.warning(f"レート制限エラーが多すぎるため、残りの検索をスキップします。")
+                                break
                         else:
+                            # レート制限以外のエラーはカウントしない
                             error_msg = f"フォールバック検索（'{fallback_query}'）でエラー: {error_str}"
                             errors.append(error_msg)
                             logging.warning(error_msg)
@@ -1765,9 +1820,10 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                 if len(news_items) >= min_required_results * 2:
                     break
                 
-                # レート制限を避けるため、検索の間に少し待機（最初の検索以外）
+                # レート制限を避けるため、検索の間に待機（最初の検索以外、レート制限エラー後は長めに）
                 if idx > 0:
-                    time.sleep(1)
+                    wait_time = 3 if rate_limit_errors > 0 else 2
+                    time.sleep(wait_time)
                     
                 try:
                     try:
@@ -1784,6 +1840,11 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                 max_results=max(max_results * english_multiplier, english_min_candidates),
                             )
                         )
+                        # 成功した場合はレート制限エラーカウントをリセット
+                        rate_limit_errors = 0
+                        # 検索結果が空の場合はログに記録
+                        if not english_results:
+                            logging.debug(f"英語検索キーワード '{keywords}' で結果が0件でした。")
                         for item in english_results:
                             url = item.get("url", "")
                             title = item.get("title", "")
@@ -1799,17 +1860,29 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
                                         "language": "en",
                                     }
                                 )
+                        # 十分なニュースが取得できた場合はループを抜ける
+                        if len(news_items) >= min_required_results * 2:
+                            logging.info(f"十分なニュースが取得できたため、英語検索を終了します（現在: {len(news_items)}件）。")
+                            break
                 except Exception as e:
                     error_str = str(e)
                     # レート制限エラーの場合は特別な処理
                     if "202" in error_str or "ratelimit" in error_str.lower() or "rate limit" in error_str.lower():
-                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました。しばらく待ってから再試行してください。"
+                        rate_limit_errors += 1
+                        error_msg = f"検索キーワード '{keywords}' でレート制限エラーが発生しました（{rate_limit_errors}/{max_rate_limit_errors}回目）。"
                         errors.append(error_msg)
                         logging.warning(error_msg)
-                        # レート制限の場合は少し長めに待機
-                        if retry_attempt < max_retries - 1:
-                            time.sleep(retry_delay_seconds * 2)
+                        # レート制限の場合は指数バックオフで待機
+                        if retry_attempt < max_retries - 1 and rate_limit_errors < max_rate_limit_errors:
+                            backoff_delay = retry_delay_seconds * (2 ** rate_limit_errors) * 2
+                            logging.info(f"レート制限のため{backoff_delay}秒待機します...")
+                            time.sleep(backoff_delay)
+                        else:
+                            # 連続レート制限エラーが多すぎる場合はこの検索をスキップ
+                            logging.warning(f"レート制限エラーが多すぎるため、残りの検索をスキップします。")
+                            break
                     else:
+                        # レート制限以外のエラーはカウントしない
                         error_msg = f"検索キーワード '{keywords}' でエラー: {error_str}"
                         errors.append(error_msg)
                         logging.warning(error_msg)
@@ -1818,18 +1891,29 @@ def fetch_news(query: str, symbol: Optional[str] = None, max_results: int = 15, 
         # 最低件数に達した場合はループを抜ける
         if len(news_items) >= min_required_results:
             break
+        
+        # 連続レート制限エラーが多すぎる場合は早期終了
+        if rate_limit_errors >= max_rate_limit_errors:
+            logging.warning(f"連続レート制限エラーが{max_rate_limit_errors}回発生しました。検索を中断します。")
+            break
     
     # 再試行後の最終的な件数をログに記録
     if len(news_items) < min_required_results:
         logging.warning(f"最低件数（{min_required_results}件）に達しませんでした。取得件数: {len(news_items)}件")
+        # エラーが発生しても、既に取得したニュースがあれば返す
+        if len(news_items) > 0:
+            logging.info(f"エラーが発生しましたが、{len(news_items)}件のニュースを返します。")
     else:
         logging.info(f"ニュース取得成功: {len(news_items)}件（目標: {min_required_results}件以上）")
     
-    # エラーが発生した場合はログに記録
-    if errors and len(news_items) == 0:
-        logging.error(f"ニュース取得に失敗しました。エラー数: {len(errors)}")
-        for err in errors[:3]:  # 最初の3つのエラーのみ表示
-            logging.error(err)
+    # エラーが発生した場合はログに記録（ただし、ニュースが取得できた場合は警告レベル）
+    if errors:
+        if len(news_items) == 0:
+            logging.error(f"ニュース取得に失敗しました。エラー数: {len(errors)}")
+            for err in errors[:3]:  # 最初の3つのエラーのみ表示
+                logging.error(err)
+        else:
+            logging.warning(f"一部の検索でエラーが発生しましたが、{len(news_items)}件のニュースを取得できました。エラー数: {len(errors)}")
     
     # 最新のニュースのみをフィルタリング（設定ファイルの日数以内）
     news_items = filter_recent_news(news_items, days_threshold=date_threshold_days)
