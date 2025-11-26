@@ -2,17 +2,17 @@
   "search": {
     "max_results": 15,
     "min_required_results": 5,
-    "max_retries": 3,
-    "retry_delay_seconds": 2,
+    "max_retries": 5,
+    "retry_delay_seconds": 3,
     "multipliers": {
-      "initial_japanese": 8,
+      "initial_japanese": 6,
       "fallback_japanese": 4,
       "english": 5
     },
     "min_candidates": {
-      "initial_japanese": 50,
-      "fallback_japanese": 30,
-      "english": 30
+      "initial_japanese": 40,
+      "fallback_japanese": 25,
+      "english": 25
     },
     "timeout": 30,
     "article_fetch_timeout": 15
